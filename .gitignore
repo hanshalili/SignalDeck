@@ -1,0 +1,89 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ── Virtual environments ────────────────────────────────────────────────────
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# ── Environment / secrets ───────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+service-account.json
+credentials.json
+
+# ── Data & databases ────────────────────────────────────────────────────────
+data/
+!data/.gitkeep
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.parquet
+*.csv
+*.json
+!package.json
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+logs/
+!logs/.gitkeep
+*.log
+
+# ── Airflow ─────────────────────────────────────────────────────────────────
+airflow/
+!airflow/.gitkeep
+
+# ── Testing / coverage ──────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*.DS_Store
+Thumbs.db
+
+# ── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── MyPy / type checkers ────────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# ── Streamlit ───────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
