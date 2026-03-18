@@ -1,132 +1,115 @@
 # SignalDeck AI
 
-> **Intelligent Market Analysis System** — an end-to-end data and AI pipeline that ingests multi-source market data, engineers features, generates LLM-powered analysis, runs a ReAct agent for trade recommendations, and surfaces everything in an interactive Streamlit dashboard.
+> **End-to-end data and AI engineering portfolio project** — a production-grade market intelligence platform that orchestrates multi-source ingestion, feature engineering, LLM analysis, and an autonomous ReAct agent into a single deployable system backed by Google BigQuery and Apache Airflow.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![Apache Airflow](https://img.shields.io/badge/orchestration-Airflow%202.9-017cee.svg)](https://airflow.apache.org/)
-[![BigQuery](https://img.shields.io/badge/storage-BigQuery-4285F4.svg)](https://cloud.google.com/bigquery)
-[![LangChain](https://img.shields.io/badge/agent-LangChain-1C3C3C.svg)](https://langchain.com/)
-[![Streamlit](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](https://streamlit.io/)
+[![Apache Airflow](https://img.shields.io/badge/Airflow-2.9-017cee.svg)](https://airflow.apache.org/)
+[![BigQuery](https://img.shields.io/badge/BigQuery-GCP-4285F4.svg)](https://cloud.google.com/bigquery)
+[![LangChain](https://img.shields.io/badge/LangChain-ReAct%20Agent-1C3C3C.svg)](https://langchain.com/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B.svg)](https://streamlit.io/)
+[![Tests](https://img.shields.io/badge/tests-53%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
 
-## Overview
+## What This Project Demonstrates
 
-Most retail market intelligence tools hand you a rating with no explanation. SignalDeck AI is different: it shows you **why** — combining price action, news sentiment, social signals, and fundamental data into a transparent, structured recommendation backed by an LLM reasoning trace and an autonomous ReAct agent.
+This is a deliberately full-stack data + AI engineering project, built to be production-deployable rather than notebook-ready. It covers the complete engineering surface area from raw API ingestion through BigQuery warehousing, feature engineering, LLM orchestration, and a live Streamlit dashboard — with no shortcuts.
 
-**Problem it solves:** Manually aggregating price feeds, news APIs, and social sentiment — then synthesising it into a coherent view — is slow, inconsistent, and hard to automate. SignalDeck AI replaces that workflow with a fully orchestrated pipeline you can run on a schedule, inspect at every step, and extend with real API keys or your own data sources.
+**Specific skills demonstrated:**
 
-**Key design principle:** The system operates end-to-end with **zero API keys** using deterministic mock data. Every external source (Alpha Vantage, NewsAPI, Reddit, OpenAI, Anthropic) has a seeded fallback, so you can develop, test, and demo without credentials.
+| Area | What's covered |
+|------|---------------|
+| **Data Engineering** | 4-source parallel ingestion, feature engineering, dual storage backend (SQLite ↔ BigQuery), time-partitioned + clustered tables, Airflow DAG with XCom |
+| **Cloud / GCP** | BigQuery dataset design, TIME partitioning, clustering on `ticker`, named query parameters via `QueryJobConfig`, service account IAM |
+| **AI / LLM Engineering** | Structured prompt design, enum-validated JSON output, multi-model support (OpenAI + Anthropic), ReAct agent with 3 custom LangChain tools |
+| **Software Engineering** | Adapter pattern for backend abstraction, retry with exponential backoff, parameterised SQL (no injection vectors), AST-safe expression evaluation, rotating structured logging |
+| **Testing** | 53 isolated tests across 9 classes — zero API keys required; all external dependencies mocked via `monkeypatch` + deterministic seeded fallbacks |
+| **Observability** | Dual-sink Loguru logging, Airflow task-level XCom introspection, BigQuery job ID tracing |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        SignalDeck AI — System Overview                      │
-│                                                                             │
-│   External Sources              Ingestion Layer                             │
-│  ┌──────────────┐   ┌────────────────────────────────────────────────┐     │
-│  │ Alpha Vantage│──▶│ ingest_stocks.py    (OHLCV + GBM mock)         │     │
-│  │ NewsAPI      │──▶│ ingest_news.py      (articles + mock)          │     │
-│  │ Reddit       │──▶│ ingest_social.py    (sentiment + mock)         │     │
-│  │ StockTwits   │──▶│ ingest_fundamentals.py (P/E, EPS + mock)       │     │
-│  └──────────────┘   └────────────────────────┬───────────────────────┘     │
-│                                              │                              │
-│                                   ┌──────────▼──────────┐                  │
-│                                   │   transform.py       │                  │
-│                                   │  MA5/20/50, RSI-14,  │                  │
-│                                   │  volatility, agg     │                  │
-│                                   │  sentiment           │                  │
-│                                   └──────────┬──────────┘                  │
-│                                              │                              │
-│                          ┌───────────────────┴────────────────────┐        │
-│                          │                                         │        │
-│                ┌─────────▼──────────┐             ┌───────────────▼──────┐ │
-│                │  LLM Analysis      │             │   ReAct Agent        │ │
-│                │  GPT-4o-mini /     │             │   LangChain +        │ │
-│                │  Claude Haiku      │             │   3 custom tools     │ │
-│                │  ──────────────    │             │   ────────────────   │ │
-│                │  Rule-based        │             │   Rule-based         │ │
-│                │  fallback          │             │   fallback           │ │
-│                └─────────┬──────────┘             └───────────────┬──────┘ │
-│                          └─────────────────┬───────────────────────┘       │
-│                                            │                               │
-│                               ┌────────────▼────────────┐                 │
-│                               │   SQLite / BigQuery      │                 │
-│                               │   7 partitioned tables   │                 │
-│                               └────────────┬────────────┘                 │
-│                                            │                               │
-│                               ┌────────────▼────────────┐                 │
-│                               │   Streamlit Dashboard   │                 │
-│                               │   5 tabs, live refresh  │                 │
-│                               └─────────────────────────┘                 │
-│                                                                             │
-│   Orchestration: Apache Airflow DAG — schedule: 0 6 * * 1-5 (weekdays)    │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         SignalDeck AI — Data Flow                            │
+│                                                                              │
+│   External Sources              Ingestion Layer (4 parallel Airflow tasks)   │
+│  ┌──────────────┐   ┌─────────────────────────────────────────────────────┐  │
+│  │ Alpha Vantage│──▶│ ingest_stocks.py      OHLCV + GBM mock fallback     │  │
+│  │ NewsAPI      │──▶│ ingest_news.py        Articles + templated fallback  │  │
+│  │ Reddit       │──▶│ ingest_social.py      Sentiment + Gaussian fallback  │  │
+│  │ StockTwits   │──▶│ ingest_fundamentals.py  P/E, EPS + snapshot fallback │  │
+│  └──────────────┘   └────────────────────────────┬────────────────────────┘  │
+│                                                  │                           │
+│                                       ┌──────────▼──────────┐               │
+│                                       │    transform.py      │               │
+│                                       │  MA5/20/50 · RSI-14  │               │
+│                                       │  Volatility · Sentiment aggregation  │
+│                                       └──────────┬──────────┘               │
+│                                                  │                           │
+│                             ┌────────────────────┴────────────────────┐     │
+│                             │                                          │     │
+│                   ┌─────────▼───────────┐              ┌──────────────▼───┐ │
+│                   │   LLM Analysis       │              │   ReAct Agent    │ │
+│                   │   GPT-4o-mini /      │              │   LangChain      │ │
+│                   │   Claude Haiku       │              │   3 custom tools │ │
+│                   │   Rule-based fallback│              │   Rule-based     │ │
+│                   └─────────┬───────────┘              └──────────────┬───┘ │
+│                             └────────────────┬───────────────────────┘      │
+│                                              │                               │
+│                                 ┌────────────▼─────────────┐                │
+│                                 │   SQLite / BigQuery       │                │
+│                                 │   7 tables · partitioned  │                │
+│                                 │   clustered on ticker     │                │
+│                                 └────────────┬─────────────┘                │
+│                                              │                               │
+│                                 ┌────────────▼─────────────┐                │
+│                                 │   Streamlit Dashboard     │                │
+│                                 │   5 tabs · TTL cache      │                │
+│                                 └──────────────────────────┘                │
+│                                                                              │
+│   Orchestration: Airflow DAG "signaldeck_daily_pipeline" · 0 6 * * 1-5      │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
-
-### Data Flow
-
-| Step | Module | Input | Output |
-|------|--------|-------|--------|
-| 1. Init | `pipeline/database.py` | — | Creates 7 tables in SQLite or BigQuery |
-| 2. Ingest | `pipeline/ingest_*.py` | External APIs / mock | Raw rows: prices, news, social, fundamentals |
-| 3. Transform | `pipeline/transform.py` | Raw tables | `processed_features`: MA, RSI, volatility, sentiment |
-| 4. Analyse | `llm/analysis_pipeline.py` | Features + raw data | `llm_analysis`: sentiment, trend, recommendation, target |
-| 5. Agent | `agent/market_agent.py` | Same features + LLM tools | `agent_recommendations`: action, rationale, stop/target |
-| 6. Visualise | `app/dashboard.py` | All tables | Interactive 5-tab Streamlit dashboard |
 
 ---
 
-## Tech Stack
+## Engineering Decisions Worth Highlighting
 
-### Orchestration
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Apache Airflow | 2.9.0 | DAG scheduling, task dependency, XCom |
+### 1. Dual-backend storage with an adapter pattern
 
-### Data Engineering
-| Tool | Version | Purpose |
-|------|---------|---------|
-| pandas | 2.2.1 | Tabular data manipulation |
-| numpy | 1.26.4 | Numerical computation |
-| scipy | 1.13.0 | Statistical functions |
-| scikit-learn | 1.4.2 | Feature scaling utilities |
-| tenacity | 8.2.3 | Retry logic for API calls |
+All pipeline modules call a single public API (`insert_*`, `query()`, `get_latest_*`) defined in `pipeline/database.py`. At runtime, every call dispatches to either `_sqlite_*` or `_bq_*` functions based on `STORAGE_BACKEND`. Callers have zero awareness of the underlying store.
 
-### Storage
-| Tool | Version | Purpose |
-|------|---------|---------|
-| SQLite | (stdlib) | Zero-config local storage (default) |
-| Google BigQuery | 3.17.2 | Production data warehouse (partitioned + clustered) |
-| google-cloud-bigquery-storage | 2.24.0 | Fast BQ read via Arrow |
+This means `pytest` runs entirely on SQLite in ~2 seconds, while production deploys to BigQuery with no code changes.
 
-### AI / LLM / Agent
-| Tool | Version | Purpose |
-|------|---------|---------|
-| LangChain | 0.1.16 | ReAct agent framework |
-| langchain-openai | 0.1.3 | GPT-4o-mini integration |
-| langchain-community | 0.0.36 | Claude integration |
-| openai | 1.23.6 | OpenAI API client |
-| anthropic | 0.23.1 | Anthropic API client |
+### 2. BigQuery schema designed for query performance
 
-### Dashboard / Visualisation
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Streamlit | 1.33.0 | Interactive web dashboard |
-| Plotly | 5.21.0 | Candlestick charts, sentiment plots |
+Every table that will be time-filtered uses `TIME_PARTITIONING` on its most-queried date column (`date` → `DATE`, `published_at` → `TIMESTAMP`). All 7 tables are clustered on `ticker`.
 
-### Infrastructure / Dev
-| Tool | Version | Purpose |
-|------|---------|---------|
-| loguru | 0.7.2 | Structured logging (stderr + rotating file) |
-| python-dotenv | 1.0.1 | Environment variable management |
-| rich | 13.7.1 | CLI tables, panels, coloured output |
-| pytest | 8.1.1 | Test suite (53 tests) |
-| pytest-mock | 3.14.0 | Mock fixtures |
+A query like "give me the latest features for AAPL" scans a single partition and a single cluster — not the full table — regardless of how much historical data accumulates.
+
+### 3. Zero SQL injection surface
+
+SQLite queries use `?` positional placeholders; BigQuery queries use `@named_parameter` with `google.cloud.bigquery.QueryJobConfig`. No user-supplied values are ever interpolated into query strings. The linter-level guarantee is enforced by a Contributing guideline in this repo.
+
+### 4. Safe expression evaluation in the agent's calculator tool
+
+The LangChain `CalculatorTool` uses a custom `_safe_eval()` built on Python's `ast.parse()` rather than `eval()`. It walks the AST and raises `ValueError` on anything that isn't `ast.Constant`, `ast.BinOp`, or `ast.UnaryOp` with a whitelisted operator. The LLM cannot execute arbitrary code through this tool.
+
+### 5. Deterministic, seeded mock data across all external sources
+
+Every external dependency (Alpha Vantage, NewsAPI, Reddit, OpenAI, Anthropic) has a fallback that produces deterministic output seeded by ticker symbol and/or date. This means:
+- The CI test suite never needs API keys
+- Local demos produce the same output every time
+- Integration tests can assert on exact values
+
+GBM (Geometric Brownian Motion) is used for price simulation because it mirrors the statistical properties of real equity prices (log-normal returns, drift, volatility) — not because it's the simplest option.
+
+### 6. LLM output is validated, not trusted
+
+`parse_llm_response()` and `parse_agent_response()` strip markdown fences, use `json.JSONDecoder.raw_decode()` (not greedy `re.DOTALL` regex) to find the first valid JSON object, then validate every field against an explicit enum set. Any out-of-range value is replaced with a safe default before being written to the database.
 
 ---
 
@@ -135,49 +118,39 @@ Most retail market intelligence tools hand you a rating with no explanation. Sig
 ```
 signaldeck/
 │
-├── config.py                   # Typed env var constants; auto-creates data/ & logs/
+├── config.py                   # Typed env-var constants; auto-creates data/ & logs/
 ├── logger.py                   # Loguru: colourised stderr + 10 MB rotating file
-├── run_pipeline.py             # CLI entry point (argparse + Rich output)
-├── setup.py                    # Pip-installable package definition
-├── setup_airflow.sh            # One-shot Airflow bootstrap script
-├── pyproject.toml              # pytest config, build backend
+├── run_pipeline.py             # CLI entry point: argparse + Rich table output
+├── setup.py / pyproject.toml   # Pip-installable package definition + pytest config
 ├── requirements.txt            # Pinned dependencies
 ├── .env.example                # Template for all 17 environment variables
-├── .gitignore                  # Excludes .env, service-account.json, data/, logs/
 │
-├── pipeline/                   # Core data pipeline
-│   ├── database.py             # Unified SQLite + BigQuery backend; 7 table schemas;
-│   │                           #   parameterised queries (no SQL injection)
-│   ├── ingest_stocks.py        # Alpha Vantage OHLCV; GBM mock fallback
-│   ├── ingest_news.py          # NewsAPI articles; templated mock fallback
-│   ├── ingest_social.py        # Reddit OAuth2 + StockTwits; Gaussian mock fallback
-│   ├── ingest_fundamentals.py  # Alpha Vantage OVERVIEW; pre-built mock fallback
-│   └── transform.py            # MA5/20/50, RSI-14, volatility, sentiment aggregation
+├── pipeline/
+│   ├── database.py             # ★ Unified SQLite + BigQuery adapter; 7 table schemas;
+│   │                           #   parameterised queries; TIME_PARTITIONING + clustering
+│   ├── ingest_stocks.py        # Alpha Vantage OHLCV; GBM mock (seeded by ticker hash)
+│   ├── ingest_news.py          # NewsAPI articles; templated mock with preset sentiments
+│   ├── ingest_social.py        # Reddit OAuth2 + StockTwits; Gaussian mock (±12% std dev)
+│   ├── ingest_fundamentals.py  # Alpha Vantage OVERVIEW; snapshot mock per ticker
+│   └── transform.py            # MA5/20/50, RSI-14, realised volatility, sentiment agg
 │
 ├── llm/
-│   └── analysis_pipeline.py   # Structured LLM analysis; rule-based fallback;
-│                               #   response validation with enum enforcement
+│   └── analysis_pipeline.py   # 4-section structured prompt; multi-model support;
+│                               #   enum-validated JSON output; rule-based fallback
 │
 ├── agent/
-│   └── market_agent.py        # LangChain ReAct agent; 3 tools (stock data, news,
-│                               #   AST-safe calculator); rule-based fallback
+│   └── market_agent.py        # LangChain AgentExecutor; 3 BaseTool subclasses;
+│                               #   AST-safe calculator; ReAct max_iterations=6
 │
 ├── dags/
-│   └── signaldeck_dag.py      # Airflow DAG: 0 6 * * 1-5; 4 parallel ingest tasks;
-│                               #   XCom pushes; graceful LLM key skip
+│   └── signaldeck_dag.py      # Airflow DAG: 4 parallel ingest → transform → llm → agent
+│                               #   XCom result pushes; graceful LLM key skip
 │
 ├── app/
-│   └── dashboard.py           # Streamlit dashboard; 5 tabs; TTL-cached queries;
-│                               #   portfolio overview + per-ticker detail
+│   └── dashboard.py           # Streamlit: 5 tabs; @st.cache_data(ttl=300); portfolio KPI row
 │
-├── tests/
-│   └── test_signaldeck.py     # 9 test classes; 53 tests; zero API keys required
-│
-├── data/
-│   └── .gitkeep               # Runtime SQLite DB stored here (gitignored)
-│
-└── logs/
-    └── .gitkeep               # Rotating log files stored here (gitignored)
+└── tests/
+    └── test_signaldeck.py     # 9 test classes; 53 tests; monkeypatch + temp SQLite isolation
 ```
 
 ---
@@ -187,64 +160,45 @@ signaldeck/
 ### Prerequisites
 
 - Python 3.10+
-- `pip` or `pip3`
-- (Optional) A Google Cloud project with BigQuery enabled for production storage
+- (Optional) A Google Cloud project with BigQuery enabled
 - (Optional) API keys for Alpha Vantage, NewsAPI, OpenAI, or Anthropic
-
-### 1. Clone the repository
 
 ```bash
 git clone https://github.com/hanshalili/SignalDeck.git
 cd SignalDeck
-```
 
-### 2. Create and activate a virtual environment
-
-```bash
 python -m venv .venv
-source .venv/bin/activate        # macOS / Linux
-# .venv\Scripts\activate         # Windows
-```
+source .venv/bin/activate
 
-### 3. Install dependencies
-
-```bash
 pip install -r requirements.txt
-```
 
-### 4. Configure environment variables
-
-```bash
 cp .env.example .env
-# Open .env and fill in any keys you have.
 # All keys are optional — the pipeline runs entirely on mock data without them.
 ```
 
-### Environment variables reference
+### Environment Variables
 
-| Variable | Default | Required |
-|----------|---------|----------|
-| `STORAGE_BACKEND` | `sqlite` | No — use `bigquery` for GCP |
-| `SQLITE_DB_PATH` | `./data/signaldeck.db` | No |
-| `GCP_PROJECT_ID` | — | Only if `STORAGE_BACKEND=bigquery` |
-| `GCP_DATASET_ID` | `signaldeck` | Only if BigQuery |
-| `GOOGLE_APPLICATION_CREDENTIALS` | — | Only if BigQuery |
-| `ALPHA_VANTAGE_API_KEY` | — | No (falls back to GBM mock) |
-| `NEWS_API_KEY` | — | No (falls back to mock articles) |
-| `OPENAI_API_KEY` | — | No (falls back to rule-based) |
-| `ANTHROPIC_API_KEY` | — | No (falls back to rule-based) |
-| `REDDIT_CLIENT_ID` | — | No |
-| `REDDIT_CLIENT_SECRET` | — | No |
-| `REDDIT_USER_AGENT` | `SignalDeck/1.0` | No |
-| `STOCKTWITS_ACCESS_TOKEN` | — | No |
-| `TICKERS` | `AAPL,MSFT,GOOGL,AMZN,META` | No |
-| `LOG_LEVEL` | `INFO` | No |
-| `AIRFLOW_HOME` | `./airflow` | Only if using Airflow |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `STORAGE_BACKEND` | `sqlite` | Set to `bigquery` for GCP |
+| `SQLITE_DB_PATH` | `./data/signaldeck.db` | Local dev path |
+| `GCP_PROJECT_ID` | — | Required if BigQuery |
+| `GCP_DATASET_ID` | `signaldeck` | Required if BigQuery |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | Service account JSON path |
+| `ALPHA_VANTAGE_API_KEY` | — | Falls back to GBM simulation |
+| `NEWS_API_KEY` | — | Falls back to templated mock |
+| `OPENAI_API_KEY` | — | Falls back to rule-based scoring |
+| `ANTHROPIC_API_KEY` | — | Falls back to rule-based scoring |
+| `REDDIT_CLIENT_ID` / `_SECRET` | — | Falls back to Gaussian mock |
+| `STOCKTWITS_ACCESS_TOKEN` | — | Falls back to Gaussian mock |
+| `TICKERS` | `AAPL,MSFT,GOOGL,AMZN,META` | Comma-separated |
+| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` |
+| `AIRFLOW_HOME` | `./airflow` | Required if using Airflow |
 
-### 5. (Optional) Set up Google Cloud credentials
+### Google Cloud Setup (BigQuery backend)
 
 ```bash
-# Create a service account with BigQuery Admin role, download the key, then:
+# Create a service account + BigQuery Admin role in GCP console, then:
 export GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
 
 # Update .env:
@@ -253,66 +207,60 @@ GCP_PROJECT_ID=your-project-id
 GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
 ```
 
-### 6. (Optional) Set up Apache Airflow
+### Airflow (optional)
 
 ```bash
 pip install apache-airflow==2.9.0
 bash setup_airflow.sh
-# Opens Airflow at http://localhost:8080 (admin / admin)
+# → http://localhost:8080  (admin / admin)
 ```
 
 ---
 
 ## Usage
 
-### Run the full pipeline (zero API keys required)
+### Run the full pipeline (zero API keys)
 
 ```bash
 python run_pipeline.py --steps all
 ```
 
-### Run specific steps
+### Run specific steps or specific tickers
 
 ```bash
-# Initialise database only
-python run_pipeline.py --steps init
-
-# Ingest and transform only
 python run_pipeline.py --steps ingest transform
-
-# LLM analysis and agent on specific tickers
-python run_pipeline.py --steps llm agent --ticker AAPL TSLA NVDA
+python run_pipeline.py --steps llm agent --ticker AAPL NVDA TSLA
 ```
 
-### Launch the dashboard
+### Dashboard
 
 ```bash
 streamlit run app/dashboard.py
-# Opens at http://localhost:8501
+# → http://localhost:8501
 ```
 
-### Run the test suite
+### Tests
 
 ```bash
 pytest tests/ -v
-# 53 tests, ~2 seconds, zero API keys required
+# 53 tests · ~2 seconds · no API keys required
 ```
 
-### Example pipeline output
+### Example output
 
 ```
-╭─────────────────────────────── Pipeline Start ───────────────────────────────╮
-│ SignalDeck AI — Intelligent Market Analysis System                           │
-│ Tickers : AAPL, MSFT, GOOGL, AMZN, META                                     │
-│ Steps   : init, ingest, transform, llm, agent                               │
-│ Backend : bigquery                                                           │
-╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────── Pipeline Start ────────────────────────────────╮
+│ SignalDeck AI — Intelligent Market Analysis System                          │
+│ Tickers : AAPL, MSFT, GOOGL, AMZN, META                                    │
+│ Steps   : init, ingest, transform, llm, agent                              │
+│ Backend : bigquery                                                          │
+╰─────────────────────────────────────────────────────────────────────────────╯
 
-▶ Running step: init        ✓  6.7s
-▶ Running step: ingest      ✓ 16.9s   (90 price rows × 5 tickers)
-▶ Running step: transform   ✓ 28.3s   (MA, RSI, volatility computed)
-▶ Running step: llm         ✓ 19.9s   (rule-based — no LLM key)
-▶ Running step: agent       ✓ 18.2s   (rule-based — no LLM key)
+▶ init        ✓  6.7s
+▶ ingest      ✓ 16.9s   (90 price rows × 5 tickers, 4 parallel tasks)
+▶ transform   ✓  4.2s   (MA, RSI-14, volatility, sentiment aggregated)
+▶ llm         ✓ 19.9s   (rule-based — no LLM key)
+▶ agent       ✓ 18.2s   (rule-based — no LLM key)
 
                     SignalDeck AI — Portfolio Summary
 ╭────────┬───────────┬──────────┬────────┬─────────┬────────┬────────────┬─────────╮
@@ -328,229 +276,182 @@ pytest tests/ -v
 
 ---
 
-## Data Pipeline / Workflow
+## Pipeline Deep Dive
 
-### Step 1 — `init` — Database initialisation
+### Step 1 — Database Initialisation (`pipeline/database.py`)
 
-`pipeline/database.py:init_db()`
+Creates 7 tables in either SQLite or BigQuery. BigQuery tables are created with `TIME_PARTITIONING` on the primary date column (mapped by name: `date` → `DATE`, `*_at` → `TIMESTAMP`) and clustering on `ticker`. A helper `_bq_col_type()` ensures partition columns are typed correctly — a common source of `400` errors in BQ schema design.
 
-Creates all 7 tables in either SQLite or BigQuery. BigQuery tables are created with:
-- **TIME partitioning** on `date` / `published_at` columns for query efficiency
-- **Clustering** on `ticker` for low-latency per-ticker reads
-- All queries use **named parameters** (`@ticker`, `@date_cutoff`) — no string interpolation
+### Step 2 — Ingestion (4 parallel Airflow tasks)
 
-### Step 2 — `ingest` — Multi-source data ingestion (4 parallel tasks in Airflow)
+| Module | Primary | Fallback | Seeded by |
+|--------|---------|---------|-----------|
+| `ingest_stocks.py` | Alpha Vantage `TIME_SERIES_DAILY` | Geometric Brownian Motion | `md5(ticker)` |
+| `ingest_news.py` | NewsAPI `/everything` | Templated articles + preset sentiments | ticker + date |
+| `ingest_social.py` | Reddit OAuth2 + StockTwits | Gaussian noise ±12% std dev | ticker + date |
+| `ingest_fundamentals.py` | Alpha Vantage `OVERVIEW` | Pre-built snapshots (AAPL–META) | — |
 
-| Ingester | Primary Source | Fallback |
-|----------|---------------|---------|
-| `ingest_stocks.py` | Alpha Vantage `TIME_SERIES_DAILY` | Geometric Brownian Motion (seeded by ticker) |
-| `ingest_news.py` | NewsAPI `/everything` | Per-ticker templated articles with preset sentiments |
-| `ingest_social.py` | Reddit OAuth2 + StockTwits public API | Gaussian-noise signals (±12%, seeded by date) |
-| `ingest_fundamentals.py` | Alpha Vantage `OVERVIEW` | Pre-built fundamental snapshots per ticker |
+All ingesters use `@retry` via tenacity with exponential backoff. Fallbacks activate automatically on `ImportError`, network failure, or missing credentials.
 
-All ingesters use `@retry` (via tenacity) with exponential backoff on network errors. Fallbacks are activated automatically when APIs are unavailable or unconfigured.
+### Step 3 — Feature Engineering (`pipeline/transform.py`)
 
-### Step 3 — `transform` — Feature engineering
-
-`pipeline/transform.py`
-
-For each ticker, reads raw tables and computes `processed_features`:
-
-| Feature | Computation |
-|---------|-------------|
-| `ma_5`, `ma_20`, `ma_50` | Simple moving averages over close prices |
-| `rsi_14` | Wilder's RSI over 14-day delta series |
-| `volatility_20` | 20-day realised volatility (std dev of returns) |
-| `avg_sentiment_score` | Mean of recent news sentiment scores |
-| `news_count` | Count of articles ingested |
+| Feature | Method |
+|---------|--------|
+| `ma_5`, `ma_20`, `ma_50` | Simple moving average over `close` |
+| `rsi_14` | Wilder's RSI: exponential smoothed up/down deltas |
+| `volatility_20` | Annualised std dev of 20-day log returns |
+| `avg_sentiment_score` | Mean of recent `news_articles.sentiment_score` |
 | `social_bullish_pct` | Average bullish % across social sources |
 | `price_change_pct` | 1-day price momentum |
 | `volume_change_pct` | 1-day volume momentum |
 
-### Step 4 — `llm` — LLM market analysis
+### Step 4 — LLM Analysis (`llm/analysis_pipeline.py`)
 
-`llm/analysis_pipeline.py`
+A structured prompt with 4 `━━━`-separated sections (price action, news, social, fundamentals) is sent to GPT-4o-mini or Claude Haiku. The response is validated against explicit enum sets for all 7 output fields before being written to `llm_analysis`. Falls back to a deterministic rule-based scoring algorithm when no LLM key is present.
 
-Constructs a structured prompt with 4 sections (price action, news, social, fundamentals) separated by `━━━` dividers. Sends to GPT-4o-mini or Claude Haiku and parses the JSON response with strict enum validation:
+### Step 5 — ReAct Agent (`agent/market_agent.py`)
 
-- `sentiment`: `bullish` | `bearish` | `neutral`
-- `trend`: `uptrend` | `downtrend` | `sideways`
-- `risk_level`: `low` | `medium` | `high`
-- `recommendation`: `BUY` | `HOLD` | `SELL`
-- `confidence`: `low` | `medium` | `high`
-- `price_target`: float or null
-- `key_observations`: list of up to 5 strings
+A LangChain `AgentExecutor` with `max_iterations=6` reasons step-by-step using three custom `BaseTool` subclasses:
 
-Falls back to a rule-based scoring algorithm when no LLM key is configured.
+| Tool | Input | What it does |
+|------|-------|-------------|
+| `query_stock_data` | `days: int` | Fetches price history + computed features |
+| `query_news` | `limit: int` | Fetches recent articles with sentiment scores |
+| `calculator` | `expression: str` | Evaluates arithmetic via AST — no `eval()` |
 
-### Step 5 — `agent` — ReAct agent recommendations
+Output: structured JSON with `action`, `rationale`, `confidence_score`, `entry_price`, `stop_loss`, `take_profit`, `time_horizon`.
 
-`agent/market_agent.py`
+### Step 6 — Dashboard (`app/dashboard.py`)
 
-Builds a LangChain `AgentExecutor` (max 6 iterations) with three tools:
-
-| Tool | Description |
-|------|-------------|
-| `query_stock_data` | Retrieves price history + computed features for the ticker |
-| `query_news` | Retrieves recent news articles with sentiment scores |
-| `calculator` | Evaluates arithmetic via AST parser (no `eval()`) |
-
-The agent reasons step-by-step and outputs a JSON recommendation: `action`, `rationale`, `confidence_score`, `entry_price`, `stop_loss`, `take_profit`, `time_horizon`.
-
-Falls back to a rule-based recommendation when no LLM key is configured.
-
-### Step 6 — Dashboard
-
-`app/dashboard.py`
-
-A Streamlit app with TTL-cached queries (5-minute refresh) and five tabs per ticker:
+Streamlit with `@st.cache_data(ttl=300)` and a 5-tab per-ticker layout:
 
 | Tab | Content |
 |-----|---------|
-| Price Chart | Candlestick (OHLC) + MA5/20/50 overlays + volume bar |
-| AI Analysis | LLM recommendation card + agent recommendation card with rationale |
-| Social Signals | Bullish/bearish pie chart + sentiment by source bar chart |
-| Fundamentals | P/E, EPS, margins, beta, 52-week range metrics |
+| Price Chart | Candlestick OHLC + MA5/20/50 overlays + volume bar |
+| AI Analysis | LLM recommendation card + agent recommendation + rationale trace |
+| Social Signals | Bullish/bearish breakdown by source |
+| Fundamentals | P/E, EPS, margins, beta, 52-week range |
 | Raw Data | Interactive table for any of the 7 database tables |
-
----
-
-## Features
-
-- **Zero-dependency operation** — Runs end-to-end without any API keys; all sources have deterministic, seeded mock fallbacks
-- **Dual storage backend** — Toggle between SQLite (local dev) and Google BigQuery (production) via a single env var
-- **LLM-powered analysis** — Supports OpenAI GPT-4o-mini and Anthropic Claude Haiku with structured JSON output and strict field validation
-- **ReAct agent** — Autonomous LangChain agent with custom tools, reasoning trace, and stop-loss/take-profit levels
-- **Airflow orchestration** — Production-ready DAG with parallel ingest tasks, XCom pushes, and graceful LLM key fallback
-- **Parameterised SQL** — All queries use placeholders (`?` in SQLite, `@param` in BigQuery) — no string interpolation
-- **Safe expression evaluation** — Calculator tool uses an AST-based evaluator; no `eval()`
-- **Rotating structured logs** — Loguru dual-sink: colourised stderr + 10 MB rotating file with 14-day retention
-- **Rich CLI** — Coloured portfolio summary table with per-step timing
-- **53 automated tests** — Full coverage of ingestion, transforms, LLM parsing, and agent logic; no API keys required
 
 ---
 
 ## Database Schema
 
 ```
-signaldeck dataset (BigQuery) / signaldeck.db (SQLite)
+signaldeck (BigQuery dataset) / signaldeck.db (SQLite)
 │
-├── stock_prices          PK (ticker, date)     — OHLCV daily, DATE partitioned
-├── news_articles         PK (article_id)       — title, sentiment, score, TIMESTAMP partitioned
-├── social_signals        PK (signal_id)        — source, bullish%, score, TIMESTAMP partitioned
-├── fundamentals          PK (ticker)           — P/E, EPS, margins, sector, beta
-├── processed_features    PK (ticker, date)     — MA, RSI, volatility, aggregated sentiment
-├── llm_analysis          PK (analysis_id)      — recommendation, confidence, target, observations
-└── agent_recommendations PK (rec_id)           — action, rationale, entry, stop, take-profit
+├── stock_prices          PK (ticker, date)      OHLCV daily · DATE partitioned
+├── news_articles         PK (article_id)        Title, sentiment, score · TIMESTAMP partitioned
+├── social_signals        PK (signal_id)         Source, bullish%, score · TIMESTAMP partitioned
+├── fundamentals          PK (ticker)            P/E, EPS, margins, sector, beta
+├── processed_features    PK (ticker, date)      MA, RSI, volatility, aggregated sentiment
+├── llm_analysis          PK (analysis_id)       Recommendation, confidence, target, observations
+└── agent_recommendations PK (rec_id)            Action, rationale, entry, stop, take-profit
 ```
 
-All BigQuery tables are clustered on `ticker` for efficient per-symbol queries.
+All BigQuery tables are clustered on `ticker`. Partition pruning + cluster filtering means per-ticker queries scan a fraction of each table regardless of data volume.
 
 ---
 
-## Monitoring / Logging
+## Testing
 
-### Loguru dual-sink
+```bash
+pytest tests/ -v
+```
+
+**53 tests across 9 classes, ~2 seconds, zero external dependencies.**
+
+| Class | What's tested |
+|-------|--------------|
+| `TestConfig` | Env var loading, defaults, storage backend switching |
+| `TestDatabase` | Table creation, insert, query, upsert for both backends |
+| `TestIngestStocks` | GBM fallback determinism, row count, schema correctness |
+| `TestIngestNews` | Mock article generation, sentiment field validation |
+| `TestIngestSocial` | Gaussian mock reproducibility, source multiplicity |
+| `TestIngestFundamentals` | Snapshot loading, `_safe_float()` edge cases |
+| `TestTransform` | RSI correctness, MA calculation, aggregation pipeline |
+| `TestLLMPipeline` | JSON parsing, enum validation, fallback trigger conditions |
+| `TestAgent` | AST evaluator security, agent response parsing, fallback |
+
+Test isolation is enforced via `autouse` fixture: `monkeypatch` + `tmp_path` redirect `SQLITE_DB_PATH` to a fresh temp file for every test, with `importlib.reload(config)` to pick up env changes. No shared state between tests.
+
+---
+
+## Observability
+
+### Structured logging (Loguru)
 
 ```
-# Colourised stderr (development)
+# Colourised stderr — development
 2026-03-17 21:31:25 | INFO     | pipeline.ingest_stocks:164 — Stored 90 price rows for AAPL
 
-# Rotating file: logs/signaldeck_YYYY-MM-DD.log
-# Rotation:  10 MB per file
-# Retention: 14 days
-# Compression: gzip
+# logs/signaldeck_YYYY-MM-DD.log — 10 MB rotation · 14-day retention · gzip
 ```
 
-Configure the level via `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` in `.env`.
+`LOG_LEVEL=DEBUG` in `.env` exposes BigQuery Job IDs, SQL strings (with parameters redacted), and per-ticker timing.
 
-### Airflow task monitoring
+### Airflow XCom
 
-Each Airflow task pushes results to XCom for downstream inspection:
+Each task pushes a result dict to XCom for downstream inspection and alerting:
 
 ```python
-# Example XCom value pushed by ingest_stocks task
-{"AAPL": 90, "MSFT": 90, "GOOGL": 90, "AMZN": 90, "META": 90}
+# ingest_stocks task
+ti.xcom_push(key="rows_inserted", value={"AAPL": 90, "MSFT": 90, ...})
 ```
 
-Tasks are configured with `retries=2` and `retry_delay=5m`. LLM tasks warn-and-continue (not fail) when no API key is present.
-
-### BigQuery query observability
-
-All BigQuery jobs are labelled with a unique `Job ID` logged at DEBUG level, making them traceable in the GCP console.
+Tasks are configured with `retries=2`, `retry_delay=timedelta(minutes=5)`. LLM tasks log a warning and continue — they do not fail the DAG — when no API key is present.
 
 ---
 
-## Data Sources & Fallbacks
+## Data Sources & Fallback Strategy
 
 | Source | Primary | Fallback | Deterministic? |
 |--------|---------|---------|----------------|
-| Stock prices | Alpha Vantage `TIME_SERIES_DAILY` | Geometric Brownian Motion simulation | Yes — seeded by ticker |
-| News | NewsAPI `/everything` | Templated articles with preset sentiments | Yes — seeded by ticker + date |
-| Social | Reddit OAuth2 + StockTwits | Gaussian-noise signals (±12% std dev) | Yes — seeded by ticker + date |
-| Fundamentals | Alpha Vantage `OVERVIEW` | Per-ticker snapshot (AAPL, MSFT, GOOGL, AMZN, META) | Yes |
+| Stock prices | Alpha Vantage | Geometric Brownian Motion | Yes — seeded by `md5(ticker)` |
+| News | NewsAPI | Templated articles | Yes — seeded by ticker + date |
+| Social | Reddit + StockTwits | Gaussian noise signals | Yes — seeded by ticker + date |
+| Fundamentals | Alpha Vantage OVERVIEW | Per-ticker snapshot | Yes |
 | LLM analysis | OpenAI / Anthropic | Rule-based signal scoring | Yes |
-| Agent | LangChain ReAct | Rule-based recommendation engine | Yes |
+| Agent | LangChain ReAct | Rule-based recommendation | Yes |
+
+The determinism guarantee means `pytest` can assert on exact output values and CI never produces flaky tests due to mock randomness.
 
 ---
 
-## Future Improvements
+## Future Work
 
-- [ ] **Real-time data** — Add WebSocket price feeds (Alpaca, Polygon.io) alongside daily batch
-- [ ] **FinBERT sentiment** — Replace heuristic sentiment scores with a fine-tuned NLP model
-- [ ] **Vector memory** — Persist agent reasoning traces in a vector store (Chroma, Pinecone) for cross-ticker pattern retrieval
-- [ ] **Backtesting module** — Replay historical recommendations against actual returns
-- [ ] **Terraform IaC** — Codify the BigQuery dataset, IAM service account, and GCS bucket creation
+- [ ] **Real-time feeds** — Alpaca / Polygon.io WebSocket for intraday prices alongside daily batch
+- [ ] **FinBERT sentiment** — Replace heuristic sentiment scores with a fine-tuned NLP model on financial text
+- [ ] **Vector memory** — Persist agent reasoning traces in Chroma/Pinecone for cross-ticker retrieval-augmented analysis
+- [ ] **Backtesting** — Replay historical recommendations against actual returns to measure strategy performance
+- [ ] **Terraform IaC** — Codify BigQuery dataset, IAM service account, and GCS bucket creation
 - [ ] **Multi-model ensemble** — Run GPT-4o and Claude in parallel; resolve disagreements via confidence-weighted voting
-- [ ] **Alerting** — Push Slack/email notifications when an agent recommendation crosses a confidence threshold
-- [ ] **CI/CD pipeline** — GitHub Actions workflow: lint → test → deploy DAG → smoke test
-- [ ] **Expanded universe** — Support ETFs, crypto, and non-US equities beyond the default 5 tickers
-- [ ] **Secret Manager integration** — Replace local `.env` with GCP Secret Manager for production deployments
+- [ ] **Alerting** — Slack/email push when agent confidence crosses a threshold
+- [ ] **CI/CD** — GitHub Actions: lint → test → deploy DAG → smoke test
+- [ ] **GCP Secret Manager** — Replace local `.env` for production deployments
+- [ ] **Expanded universe** — ETFs, crypto, and non-US equities beyond the default 5 tickers
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Please follow this workflow:
+1. Fork and create a feature branch: `git checkout -b feature/your-feature`
+2. Ensure all tests pass: `pytest tests/ -v`
+3. Follow existing commit style: `<type>: <short summary>`
+4. Open a PR against `main`
 
-1. Fork the repository and create a feature branch:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-2. Make your changes. Ensure the test suite still passes:
-   ```bash
-   pytest tests/ -v
-   ```
-
-3. Keep commits focused and descriptive. Follow the existing commit style:
-   ```
-   <type>: <short summary>
-
-   <body explaining what changed and why>
-   ```
-
-4. Open a pull request against `main` with a clear description of the change.
-
-**Code standards:**
+**Non-negotiable code standards:**
 - All database queries must use parameterised placeholders — no f-string SQL
-- No `eval()` — use `ast`-based evaluation for expressions
-- New ingestion sources must include a deterministic mock fallback
-- New features should include at least one corresponding test
+- No `eval()` — use `ast`-based evaluation for any expression handling
+- New ingestion sources must include a deterministic seeded mock fallback
+- New features require at least one corresponding test
 
 ---
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
 
 ---
 
-## Acknowledgements
-
-- [LangChain](https://langchain.com/) — ReAct agent framework
-- [Apache Airflow](https://airflow.apache.org/) — workflow orchestration
-- [Streamlit](https://streamlit.io/) — dashboard framework
-- [Loguru](https://github.com/Delgan/loguru) — structured logging
-- [Alpha Vantage](https://www.alphavantage.co/) — market data API
-- [NewsAPI](https://newsapi.org/) — financial news API
+*Built by Hans Matthew Halili — [GitHub](https://github.com/hanshalili)*
