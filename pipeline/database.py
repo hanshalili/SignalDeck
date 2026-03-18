@@ -16,14 +16,17 @@ insert_fundamentals(rows)
 insert_processed_features(rows)
 insert_llm_analysis(rows)
 insert_agent_recommendations(rows)
+insert_signals(rows)
 query(table, ticker, limit)
 get_latest_stock_price(ticker)
 get_latest_features(ticker)
 get_latest_news(ticker, limit)
 get_latest_sentiment(ticker, limit)
 get_latest_social(ticker, limit)
+get_latest_signal(ticker)
 get_stock_history(ticker, days)
 get_news_history(ticker, days)
+get_signal_history(ticker, days)
 """
 import sqlite3
 import json
@@ -198,6 +201,29 @@ SCHEMAS: dict[str, dict] = {
         "primary_key": ("rec_id",),
         "bq_partition": "date",
         "bq_cluster": ["ticker", "action"],
+    },
+    "signal_history": {
+        "columns": [
+            # ── Identity ─────────────────────────────────────────────────────
+            ("signal_id",        "TEXT NOT NULL"),   # UUID
+            ("ticker",           "TEXT NOT NULL"),
+            ("date",             "TEXT NOT NULL"),   # YYYY-MM-DD
+            # ── Final output (what the frontend shows) ───────────────────────
+            ("signal",           "TEXT"),            # buy | hold | sell
+            ("confidence_score", "REAL"),            # 0.30 – 0.90
+            ("supporting_reason","TEXT"),            # plain-English explanation
+            # ── Sub-signal verdicts (for frontend breakdown cards) ────────────
+            ("trend_signal",     "TEXT"),            # bullish | neutral | bearish
+            ("momentum_signal",  "TEXT"),            # bullish | neutral | bearish
+            ("volatility_signal","TEXT"),            # label + annualised value
+            ("sentiment_signal", "TEXT"),            # bullish | neutral | bearish
+            # ── Raw score for sorting / filtering ────────────────────────────
+            ("raw_score",        "INTEGER"),         # -3 to +3
+            ("created_at",       "TEXT"),
+        ],
+        "primary_key": ("signal_id",),
+        "bq_partition": "date",
+        "bq_cluster": ["ticker", "signal"],
     },
 }
 
@@ -512,6 +538,10 @@ def insert_agent_recommendations(rows: list[dict]) -> int:
     return _insert("agent_recommendations", rows)
 
 
+def insert_signals(rows: list[dict]) -> int:
+    return _insert("signal_history", rows)
+
+
 def query(
     table: str,
     ticker: str | None = None,
@@ -569,6 +599,29 @@ def get_stock_history(ticker: str, days: int = 30) -> list[dict]:
         )
     return _sqlite_query(
         "stock_prices", ticker=ticker, limit=days + 5,
+        order_by="date DESC", date_col="date", date_cutoff=cutoff,
+    )
+
+
+def get_latest_signal(ticker: str) -> dict | None:
+    """Return the most recent signal_history row for a ticker."""
+    if config.get_storage_backend() == "bigquery":
+        rows = _bq_query("signal_history", ticker=ticker, limit=1, order_by="date DESC")
+    else:
+        rows = _sqlite_query("signal_history", ticker=ticker, limit=1, order_by="date DESC")
+    return rows[0] if rows else None
+
+
+def get_signal_history(ticker: str, days: int = 30) -> list[dict]:
+    """Return recent signal_history rows for a ticker."""
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    if config.get_storage_backend() == "bigquery":
+        return _bq_query(
+            "signal_history", ticker=ticker, limit=days + 5,
+            order_by="date DESC", date_col="date", date_cutoff=cutoff,
+        )
+    return _sqlite_query(
+        "signal_history", ticker=ticker, limit=days + 5,
         order_by="date DESC", date_col="date", date_cutoff=cutoff,
     )
 
