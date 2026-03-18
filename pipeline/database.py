@@ -17,6 +17,7 @@ insert_processed_features(rows)
 insert_llm_analysis(rows)
 insert_agent_recommendations(rows)
 insert_signals(rows)
+insert_llm_insights(rows)
 query(table, ticker, limit)
 get_latest_stock_price(ticker)
 get_latest_features(ticker)
@@ -24,6 +25,7 @@ get_latest_news(ticker, limit)
 get_latest_sentiment(ticker, limit)
 get_latest_social(ticker, limit)
 get_latest_signal(ticker)
+get_latest_insight(ticker)
 get_stock_history(ticker, days)
 get_news_history(ticker, days)
 get_signal_history(ticker, days)
@@ -224,6 +226,28 @@ SCHEMAS: dict[str, dict] = {
         "primary_key": ("signal_id",),
         "bq_partition": "date",
         "bq_cluster": ["ticker", "signal"],
+    },
+    "llm_insights": {
+        "columns": [
+            # ── Identity ─────────────────────────────────────────────────────
+            ("insight_id",        "TEXT NOT NULL"),  # UUID
+            ("ticker",            "TEXT NOT NULL"),
+            ("date",              "TEXT NOT NULL"),  # YYYY-MM-DD
+            # ── Five insight fields (what the frontend renders) ───────────────
+            ("what_is_happening", "TEXT"),  # 1-2 sentences: current price/signal state
+            ("why_signal_changed","TEXT"),  # 1 sentence: what drove the signal
+            ("bull_case",         "TEXT"),  # 1-2 sentences: upside scenario
+            ("bear_case",         "TEXT"),  # 1-2 sentences: downside risk
+            ("summary",           "TEXT"),  # 1 sentence: bottom line
+            # ── Provenance ───────────────────────────────────────────────────
+            ("signal_ref",        "TEXT"),  # FK → signal_history.signal_id
+            ("model_used",        "TEXT"),  # gpt-4o-mini | claude-haiku-... | rule_based
+            ("raw_response",      "TEXT"),  # raw LLM text for debugging
+            ("created_at",        "TEXT"),
+        ],
+        "primary_key": ("insight_id",),
+        "bq_partition": "date",
+        "bq_cluster": ["ticker"],
     },
 }
 
@@ -542,6 +566,10 @@ def insert_signals(rows: list[dict]) -> int:
     return _insert("signal_history", rows)
 
 
+def insert_llm_insights(rows: list[dict]) -> int:
+    return _insert("llm_insights", rows)
+
+
 def query(
     table: str,
     ticker: str | None = None,
@@ -609,6 +637,15 @@ def get_latest_signal(ticker: str) -> dict | None:
         rows = _bq_query("signal_history", ticker=ticker, limit=1, order_by="date DESC")
     else:
         rows = _sqlite_query("signal_history", ticker=ticker, limit=1, order_by="date DESC")
+    return rows[0] if rows else None
+
+
+def get_latest_insight(ticker: str) -> dict | None:
+    """Return the most recent llm_insights row for a ticker."""
+    if config.get_storage_backend() == "bigquery":
+        rows = _bq_query("llm_insights", ticker=ticker, limit=1, order_by="date DESC")
+    else:
+        rows = _sqlite_query("llm_insights", ticker=ticker, limit=1, order_by="date DESC")
     return rows[0] if rows else None
 
 

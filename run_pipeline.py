@@ -14,6 +14,7 @@ Steps
     sentiment   — Score news articles with VADER / passthrough
     transform   — Compute derived features
     signals     — Run interpretable signal engine (buy/hold/sell)
+    insights    — Generate LLM narrative insights (what/why/bull/bear/summary)
     llm         — Run LLM market analysis
     agent       — Run ReAct agent recommendations
     all         — Run every step in sequence
@@ -33,7 +34,7 @@ from logger import log
 
 console = Console()
 
-STEP_ORDER = ["init", "ingest", "sentiment", "transform", "signals", "llm", "agent"]
+STEP_ORDER = ["init", "ingest", "sentiment", "transform", "signals", "insights", "llm", "agent"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step functions
@@ -91,6 +92,11 @@ def step_signals(tickers: list[str]) -> dict:
     return run_all_signals(tickers)
 
 
+def step_insights(tickers: list[str]) -> dict:
+    from llm.insights import run_insights_pipeline
+    return run_insights_pipeline(tickers)
+
+
 def step_transform(tickers: list[str]) -> dict:
     from pipeline.transform import transform_all
     return transform_all(tickers)
@@ -112,6 +118,7 @@ STEPS = {
     "sentiment": step_sentiment,
     "transform": step_transform,
     "signals":   step_signals,
+    "insights":  step_insights,
     "llm":       step_llm,
     "agent":     step_agent,
 }
@@ -192,7 +199,7 @@ def parse_args() -> argparse.Namespace:
         default=["all"],
         choices=STEP_ORDER + ["all"],
         metavar="STEP",
-        help="Steps to run: init ingest sentiment transform signals llm agent  (default: all)",
+        help="Steps to run: init ingest sentiment transform signals insights llm agent  (default: all)",
     )
     parser.add_argument(
         "--ticker",
