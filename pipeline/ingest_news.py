@@ -1,10 +1,18 @@
 """
 pipeline/ingest_news.py — Financial news ingestion for SignalDeck AI.
 
-Primary source : NewsAPI (https://newsapi.org)
-Fallback       : Per-ticker templated mock articles with preset sentiments
+Source priority
+---------------
+1. Alpha Vantage NEWS_SENTIMENT  — ticker-specific articles + built-in sentiment
+                                   scores; uses the same API key already in config.
+2. NewsAPI /everything           — general news search; no sentiment provided.
+3. Mock templates                — deterministic, seeded; always available.
 
-Mock data is deterministic (seeded by ticker + date) so test runs are stable.
+Alpha Vantage is the preferred primary source because:
+  - The same ALPHA_VANTAGE_API_KEY is already used for price data
+  - Returns ticker-targeted articles (not just keyword matches)
+  - Includes per-ticker sentiment labels + numeric scores
+  - No additional credentials needed
 """
 import hashlib
 import random
@@ -19,7 +27,26 @@ import config
 from logger import log
 from pipeline.database import insert_news_articles
 
-# ── NewsAPI ───────────────────────────────────────────────────────────────────
+_AV_URL      = "https://www.alphavantage.co/query"
+_AV_FUNCTION = "NEWS_SENTIMENT"
+
+# Alpha Vantage sentiment labels → our standard [-1, +1] score
+_AV_LABEL_SCORE: dict[str, float] = {
+    "Bullish":          1.0,
+    "Somewhat-Bullish": 0.5,
+    "Neutral":          0.0,
+    "Somewhat-Bearish": -0.5,
+    "Bearish":          -1.0,
+}
+
+# Alpha Vantage labels → our three-way label
+_AV_LABEL_MAP: dict[str, str] = {
+    "Bullish":          "positive",
+    "Somewhat-Bullish": "positive",
+    "Neutral":          "neutral",
+    "Somewhat-Bearish": "negative",
+    "Bearish":          "negative",
+}
 
 _NEWSAPI_URL = "https://newsapi.org/v2/everything"
 
@@ -60,6 +87,20 @@ _MOCK_TEMPLATES: dict[str, list[dict]] = {
         {"title": "Ray-Ban Meta smart glasses sell out globally ahead of holiday season", "sentiment": "positive", "score": 0.72},
         {"title": "Threads platform engagement drops 30% from peak", "sentiment": "negative", "score": -0.54},
         {"title": "Meta Reality Labs narrows operating losses significantly", "sentiment": "positive", "score": 0.66},
+    ],
+    "NVDA": [
+        {"title": "Nvidia data center revenue hits record $22B as AI demand accelerates", "sentiment": "positive", "score": 0.91},
+        {"title": "US expands chip export restrictions to China, curbing Nvidia H20 sales", "sentiment": "negative", "score": -0.74},
+        {"title": "Nvidia Blackwell GPU shipments exceed initial production forecasts", "sentiment": "positive", "score": 0.86},
+        {"title": "AMD challenges Nvidia with new MI300X benchmarks in LLM inference", "sentiment": "negative", "score": -0.52},
+        {"title": "Nvidia announces $500B US AI infrastructure partnership with hyperscalers", "sentiment": "positive", "score": 0.89},
+    ],
+    "TSLA": [
+        {"title": "Tesla Cybertruck deliveries ramp as production bottlenecks ease", "sentiment": "positive", "score": 0.71},
+        {"title": "Tesla cuts Model Y prices again amid intensifying EV competition from BYD", "sentiment": "negative", "score": -0.65},
+        {"title": "Tesla FSD v13 achieves significant milestone in unsupervised highway driving", "sentiment": "positive", "score": 0.78},
+        {"title": "Tesla misses Q4 delivery estimates for second consecutive quarter", "sentiment": "negative", "score": -0.69},
+        {"title": "Tesla Megapack energy storage backlog grows to record $12B", "sentiment": "positive", "score": 0.74},
     ],
 }
 
@@ -102,6 +143,93 @@ def _mock_articles(ticker: str, n: int = 5) -> list[dict]:
         })
 
     return rows
+
+
+# ── Alpha Vantage NEWS_SENTIMENT fetch ────────────────────────────────────────
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(requests.RequestException),
+    reraise=False,
+)
+def _fetch_av_news(ticker: str, limit: int = 10) -> Optional[list[dict]]:
+    """
+    Fetch news + sentiment from Alpha Vantage NEWS_SENTIMENT endpoint.
+
+    Returns articles with ticker-specific sentiment scores already included,
+    so no downstream VADER pass is strictly required for AV-sourced articles
+    (though we still run VADER independently for consistency).
+    """
+    if not config.ALPHA_VANTAGE_API_KEY:
+        return None
+
+    params = {
+        "function": _AV_FUNCTION,
+        "tickers":  ticker,
+        "limit":    limit,
+        "sort":     "LATEST",
+        "apikey":   config.ALPHA_VANTAGE_API_KEY,
+    }
+    resp = requests.get(_AV_URL, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    feed = data.get("feed", [])
+    if not feed:
+        # AV returns {"Information": "..."} when rate-limited
+        note = data.get("Information") or data.get("Note", "")
+        if note:
+            log.warning("Alpha Vantage NEWS_SENTIMENT rate-limited for {}: {}", ticker, note[:80])
+        return None
+
+    rows: list[dict] = []
+    for item in feed:
+        title    = item.get("title", "")
+        url      = item.get("url", "")
+        source   = item.get("source", "")
+        raw_time = item.get("time_published", "")
+
+        # Parse AV timestamp: "20241115T120000" → ISO
+        try:
+            published = datetime.strptime(raw_time, "%Y%m%dT%H%M%S").isoformat()
+        except (ValueError, TypeError):
+            published = datetime.utcnow().isoformat()
+
+        # Prefer ticker-specific sentiment; fall back to overall
+        ticker_entry = next(
+            (ts for ts in item.get("ticker_sentiment", []) if ts.get("ticker") == ticker),
+            None,
+        )
+        if ticker_entry:
+            label_raw = ticker_entry.get("ticker_sentiment_label", "Neutral")
+            try:
+                score = float(ticker_entry.get("ticker_sentiment_score", 0.0))
+            except (ValueError, TypeError):
+                score = _AV_LABEL_SCORE.get(label_raw, 0.0)
+        else:
+            label_raw = item.get("overall_sentiment_label", "Neutral")
+            try:
+                score = float(item.get("overall_sentiment_score", 0.0))
+            except (ValueError, TypeError):
+                score = _AV_LABEL_SCORE.get(label_raw, 0.0)
+
+        sentiment = _AV_LABEL_MAP.get(label_raw, "neutral")
+        article_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{ticker}_{title}_{published[:10]}"))
+
+        rows.append({
+            "article_id":      article_id,
+            "ticker":          ticker,
+            "title":           title,
+            "description":     item.get("summary", "")[:500],
+            "source_name":     source,
+            "published_at":    published,
+            "sentiment":       sentiment,
+            "sentiment_score": round(score, 4),
+            "url":             url,
+        })
+
+    return rows if rows else None
 
 
 # ── NewsAPI fetch ─────────────────────────────────────────────────────────────
@@ -158,11 +286,23 @@ def ingest_ticker_news(ticker: str) -> int:
     log.info("Ingesting news: {}", ticker)
 
     rows = None
-    try:
-        rows = _fetch_newsapi(ticker)
-    except Exception as exc:
-        log.warning("NewsAPI failed for {}: {}", ticker, exc)
 
+    # 1. Alpha Vantage NEWS_SENTIMENT (primary — ticker-targeted + built-in sentiment)
+    try:
+        rows = _fetch_av_news(ticker)
+        if rows:
+            log.info("Alpha Vantage returned {} articles for {}", len(rows), ticker)
+    except Exception as exc:
+        log.warning("Alpha Vantage news failed for {}: {}", ticker, exc)
+
+    # 2. NewsAPI (secondary)
+    if not rows:
+        try:
+            rows = _fetch_newsapi(ticker)
+        except Exception as exc:
+            log.warning("NewsAPI failed for {}: {}", ticker, exc)
+
+    # 3. Mock templates (always available)
     if not rows:
         log.info("Using mock news for {}", ticker)
         rows = _mock_articles(ticker)

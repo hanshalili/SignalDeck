@@ -169,12 +169,12 @@ def _call_anthropic(prompt: str) -> tuple[str, str]:
 def _rule_based_analysis(ticker: str, features: dict, price: dict) -> dict:
     """Deterministic fallback when no LLM key is configured."""
     close = price.get("close", 0)
-    ma5 = features.get("ma_5")
-    ma20 = features.get("ma_20")
+    ma5 = features.get("sma_5")
+    ma20 = features.get("sma_20")
     rsi = features.get("rsi_14") or 50
     news_score = features.get("avg_sentiment_score") or 0
     social_bullish = features.get("social_bullish_pct") or 50
-    price_chg = features.get("price_change_pct") or 0
+    price_chg = features.get("daily_return") or 0
 
     # Simple scoring
     score = 0
@@ -210,7 +210,7 @@ def _rule_based_analysis(ticker: str, features: dict, price: dict) -> dict:
 
     observations = [
         f"RSI-14 at {rsi:.1f} — {'oversold' if rsi < 30 else ('overbought' if rsi > 70 else 'neutral')}",
-        f"MA signal: {_compute_ma_signal(ma5, ma20, features.get('ma_50'))}",
+        f"MA signal: {_compute_ma_signal(ma5, ma20, features.get('sma_50'))}",
         f"News sentiment score: {news_score:+.3f}",
         f"Social bullish sentiment: {social_bullish:.1f}%",
         f"Price momentum: {price_chg:+.2f}% (1-day)",
@@ -307,12 +307,12 @@ def analyze_ticker(ticker: str) -> dict:
     features = features_rows[0] if features_rows else {}
 
     close = price.get("close") or 0
-    ma5 = features.get("ma_5")
-    ma20 = features.get("ma_20")
-    ma50 = features.get("ma_50")
+    ma5 = features.get("sma_5")
+    ma20 = features.get("sma_20")
+    ma50 = features.get("sma_50")
     rsi = features.get("rsi_14")
-    vol = features.get("volatility_20")
-    price_chg = features.get("price_change_pct")
+    vol = features.get("volatility_20d")
+    price_chg = features.get("daily_return")
     vol_chg = features.get("volume_change_pct")
 
     raw_response = None

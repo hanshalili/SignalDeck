@@ -10,6 +10,7 @@ Public API
 init_db()
 insert_stock_prices(rows)
 insert_news_articles(rows)
+insert_sentiment_scores(rows)
 insert_social_signals(rows)
 insert_fundamentals(rows)
 insert_processed_features(rows)
@@ -17,7 +18,9 @@ insert_llm_analysis(rows)
 insert_agent_recommendations(rows)
 query(table, ticker, limit)
 get_latest_stock_price(ticker)
+get_latest_features(ticker)
 get_latest_news(ticker, limit)
+get_latest_sentiment(ticker, limit)
 get_latest_social(ticker, limit)
 get_stock_history(ticker, days)
 get_news_history(ticker, days)
@@ -69,6 +72,24 @@ SCHEMAS: dict[str, dict] = {
         "bq_partition": "published_at",
         "bq_cluster": ["ticker", "sentiment"],
     },
+    "sentiment_scores": {
+        "columns": [
+            ("score_id",   "TEXT NOT NULL"),   # deterministic UUID: article_id + method
+            ("article_id", "TEXT NOT NULL"),   # FK → news_articles.article_id
+            ("ticker",     "TEXT NOT NULL"),
+            ("headline",   "TEXT"),            # article title (denormalised for fast reads)
+            ("compound",   "REAL"),            # overall score [-1.0, +1.0]
+            ("positive",   "REAL"),            # positive component [0.0, 1.0]
+            ("negative",   "REAL"),            # negative component [0.0, 1.0]
+            ("neutral",    "REAL"),            # neutral component  [0.0, 1.0]
+            ("label",      "TEXT"),            # positive | negative | neutral
+            ("method",     "TEXT"),            # vader | alpha_vantage | passthrough
+            ("scored_at",  "TEXT"),
+        ],
+        "primary_key": ("score_id",),
+        "bq_partition": "scored_at",           # TIMESTAMP — enables date-range pruning
+        "bq_cluster": ["ticker", "label"],     # fast per-ticker sentiment queries
+    },
     "social_signals": {
         "columns": [
             ("signal_id", "TEXT NOT NULL"),
@@ -112,19 +133,28 @@ SCHEMAS: dict[str, dict] = {
     },
     "processed_features": {
         "columns": [
-            ("ticker", "TEXT NOT NULL"),
-            ("date", "TEXT NOT NULL"),
-            ("ma_5", "REAL"),
-            ("ma_20", "REAL"),
-            ("ma_50", "REAL"),
-            ("rsi_14", "REAL"),
-            ("volatility_20", "REAL"),
-            ("avg_sentiment_score", "REAL"),
-            ("news_count", "INTEGER"),
-            ("social_bullish_pct", "REAL"),
-            ("price_change_pct", "REAL"),
-            ("volume_change_pct", "REAL"),
-            ("created_at", "TEXT"),
+            ("ticker",              "TEXT NOT NULL"),
+            ("date",                "TEXT NOT NULL"),
+            # ── Price reference ──────────────────────────────────────────────
+            ("close",               "REAL"),            # latest closing price
+            # ── Return & momentum ────────────────────────────────────────────
+            ("daily_return",        "REAL"),            # 1-day % return
+            ("momentum_5d",         "REAL"),            # 5-day % price change
+            ("momentum_20d",        "REAL"),            # 20-day % price change
+            # ── Trend indicators ─────────────────────────────────────────────
+            ("sma_5",               "REAL"),            # 5-day simple MA
+            ("sma_20",              "REAL"),            # 20-day simple MA
+            ("sma_50",              "REAL"),            # 50-day simple MA
+            ("rsi_14",              "REAL"),            # Wilder's RSI (14 periods)
+            # ── Volatility & volume ──────────────────────────────────────────
+            ("volatility_20d",      "REAL"),            # 20-day annualized vol
+            ("volume_avg_20d",      "REAL"),            # 20-day avg daily volume
+            ("volume_change_pct",   "REAL"),            # 1-day volume change %
+            # ── Sentiment aggregates ─────────────────────────────────────────
+            ("avg_sentiment_score", "REAL"),            # mean news sentiment
+            ("news_count",          "INTEGER"),         # recent article count
+            ("social_bullish_pct",  "REAL"),            # avg bullish % (social)
+            ("created_at",          "TEXT"),
         ],
         "primary_key": ("ticker", "date"),
         "bq_partition": "date",
@@ -458,6 +488,10 @@ def insert_news_articles(rows: list[dict]) -> int:
     return _insert("news_articles", rows)
 
 
+def insert_sentiment_scores(rows: list[dict]) -> int:
+    return _insert("sentiment_scores", rows)
+
+
 def insert_social_signals(rows: list[dict]) -> int:
     return _insert("social_signals", rows)
 
@@ -490,12 +524,28 @@ def query(
     return _sqlite_query(table, ticker, limit)
 
 
+def get_latest_features(ticker: str) -> dict | None:
+    """Return the most recent processed_features row for a ticker."""
+    if config.get_storage_backend() == "bigquery":
+        rows = _bq_query("processed_features", ticker=ticker, limit=1, order_by="date DESC")
+    else:
+        rows = _sqlite_query("processed_features", ticker=ticker, limit=1, order_by="date DESC")
+    return rows[0] if rows else None
+
+
 def get_latest_stock_price(ticker: str) -> dict | None:
     if config.get_storage_backend() == "bigquery":
         rows = _bq_query("stock_prices", ticker=ticker, limit=1, order_by="date DESC")
     else:
         rows = _sqlite_query("stock_prices", ticker=ticker, limit=1, order_by="date DESC")
     return rows[0] if rows else None
+
+
+def get_latest_sentiment(ticker: str, limit: int = 20) -> list[dict]:
+    """Return most recent sentiment_scores rows for a ticker."""
+    if config.get_storage_backend() == "bigquery":
+        return _bq_query("sentiment_scores", ticker=ticker, limit=limit, order_by="scored_at DESC")
+    return _sqlite_query("sentiment_scores", ticker=ticker, limit=limit, order_by="scored_at DESC")
 
 
 def get_latest_news(ticker: str, limit: int = 10) -> list[dict]:

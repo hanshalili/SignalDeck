@@ -40,6 +40,16 @@ _BASE_PRICES: dict[str, float] = {
 }
 _DEFAULT_BASE_PRICE = 100.0
 
+# Per-ticker GBM parameters: (daily_drift, daily_volatility)
+# TSLA and NVDA carry materially higher volatility than AAPL.
+# Calibrated to approximate each stock's historical realized vol.
+_GBM_PARAMS: dict[str, tuple[float, float]] = {
+    "AAPL": (0.0003, 0.018),   # ~1.8% daily vol
+    "NVDA": (0.0005, 0.032),   # ~3.2% daily vol — AI-driven momentum stock
+    "TSLA": (0.0002, 0.038),   # ~3.8% daily vol — historically the most volatile
+}
+_DEFAULT_GBM_PARAMS = (0.0003, 0.018)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -63,8 +73,7 @@ def _gbm_mock(ticker: str, n_days: int = 90) -> list[dict]:
     rng = random.Random(seed)
 
     base = _BASE_PRICES.get(ticker.upper(), _DEFAULT_BASE_PRICE)
-    mu = 0.0003      # daily drift
-    sigma = 0.018    # daily volatility
+    mu, sigma = _GBM_PARAMS.get(ticker.upper(), _DEFAULT_GBM_PARAMS)
 
     end_date = date.today()
     start_date = end_date - timedelta(days=int(n_days * 1.5))

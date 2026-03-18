@@ -103,6 +103,42 @@ _MOCK_FUNDAMENTALS: dict[str, dict] = {
         "beta": 1.21,
         "sector": "Communication Services",
     },
+    "NVDA": {
+        # AI chip leader — elevated PE reflects growth premium
+        "market_cap": 2_300_000_000_000.0,
+        "pe_ratio": 66.5,
+        "forward_pe": 38.2,
+        "peg_ratio": 1.7,
+        "price_to_book": 36.4,
+        "dividend_yield": 0.001,
+        "eps": 13.89,
+        "revenue_ttm": 96_000_000_000.0,
+        "profit_margin": 0.557,
+        "debt_to_equity": 13.4,
+        "analyst_target": 1_000.0,
+        "week52_high": 974.0,
+        "week52_low": 430.0,
+        "beta": 1.68,
+        "sector": "Technology",
+    },
+    "TSLA": {
+        # EV + energy company — high beta, no dividend, growth PE
+        "market_cap": 620_000_000_000.0,
+        "pe_ratio": 55.2,
+        "forward_pe": 40.1,
+        "peg_ratio": 2.4,
+        "price_to_book": 10.8,
+        "dividend_yield": 0.0,
+        "eps": 3.62,
+        "revenue_ttm": 97_000_000_000.0,
+        "profit_margin": 0.133,
+        "debt_to_equity": 19.2,
+        "analyst_target": 250.0,
+        "week52_high": 299.3,
+        "week52_low": 138.8,
+        "beta": 2.31,
+        "sector": "Consumer Discretionary",
+    },
 }
 
 _DEFAULT_FUNDAMENTALS: dict = {

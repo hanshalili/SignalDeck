@@ -298,8 +298,8 @@ def _rule_based_recommendation(ticker: str) -> dict:
 
     close = price_row.get("close") or 100.0
     rsi = features.get("rsi_14") or 50.0
-    ma5 = features.get("ma_5")
-    ma20 = features.get("ma_20")
+    ma5 = features.get("sma_5")
+    ma20 = features.get("sma_20")
     news_score = features.get("avg_sentiment_score") or 0.0
     social_bullish = features.get("social_bullish_pct") or 50.0
 

@@ -4,13 +4,14 @@ run_pipeline.py — CLI entry point for SignalDeck AI.
 Usage
 -----
     python run_pipeline.py --steps all
-    python run_pipeline.py --steps ingest transform
+    python run_pipeline.py --steps ingest sentiment transform
     python run_pipeline.py --steps llm agent --ticker AAPL
 
 Steps
 -----
     init        — Initialise database schema
     ingest      — Ingest stocks, news, social, and fundamentals
+    sentiment   — Score news articles with VADER / passthrough
     transform   — Compute derived features
     llm         — Run LLM market analysis
     agent       — Run ReAct agent recommendations
@@ -31,7 +32,7 @@ from logger import log
 
 console = Console()
 
-STEP_ORDER = ["init", "ingest", "transform", "llm", "agent"]
+STEP_ORDER = ["init", "ingest", "sentiment", "transform", "llm", "agent"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step functions
@@ -79,6 +80,11 @@ def step_ingest(tickers: list[str]) -> dict:
     return results
 
 
+def step_sentiment(tickers: list[str]) -> dict:
+    from pipeline.sentiment import score_all_news
+    return score_all_news(tickers)
+
+
 def step_transform(tickers: list[str]) -> dict:
     from pipeline.transform import transform_all
     return transform_all(tickers)
@@ -95,11 +101,12 @@ def step_agent(tickers: list[str]) -> dict:
 
 
 STEPS = {
-    "init": step_init,
-    "ingest": step_ingest,
+    "init":      step_init,
+    "ingest":    step_ingest,
+    "sentiment": step_sentiment,
     "transform": step_transform,
-    "llm": step_llm,
-    "agent": step_agent,
+    "llm":       step_llm,
+    "agent":     step_agent,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,7 +185,7 @@ def parse_args() -> argparse.Namespace:
         default=["all"],
         choices=STEP_ORDER + ["all"],
         metavar="STEP",
-        help="Steps to run: init ingest transform llm agent  (default: all)",
+        help="Steps to run: init ingest sentiment transform llm agent  (default: all)",
     )
     parser.add_argument(
         "--ticker",

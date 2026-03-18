@@ -418,14 +418,14 @@ class TestLLMAnalysis:
 
     def test_rule_based_analysis_buy(self):
         from llm.analysis_pipeline import _rule_based_analysis
-        features = {"rsi_14": 28.0, "ma_5": 180.0, "ma_20": 175.0, "avg_sentiment_score": 0.5, "social_bullish_pct": 70.0, "price_change_pct": 3.0}
+        features = {"rsi_14": 28.0, "sma_5": 180.0, "sma_20": 175.0, "avg_sentiment_score": 0.5, "social_bullish_pct": 70.0, "daily_return": 3.0}
         price = {"close": 180.0}
         result = _rule_based_analysis("AAPL", features, price)
         assert result["recommendation"] == "BUY"
 
     def test_rule_based_analysis_sell(self):
         from llm.analysis_pipeline import _rule_based_analysis
-        features = {"rsi_14": 78.0, "ma_5": 160.0, "ma_20": 175.0, "avg_sentiment_score": -0.5, "social_bullish_pct": 30.0, "price_change_pct": -4.0}
+        features = {"rsi_14": 78.0, "sma_5": 160.0, "sma_20": 175.0, "avg_sentiment_score": -0.5, "social_bullish_pct": 30.0, "daily_return": -4.0}
         price = {"close": 160.0}
         result = _rule_based_analysis("AAPL", features, price)
         assert result["recommendation"] == "SELL"
@@ -466,9 +466,9 @@ class TestAgent:
         insert_news_articles(_mock_articles(ticker))
         insert_processed_features([{
             "ticker": ticker, "date": datetime.utcnow().strftime("%Y-%m-%d"),
-            "ma_5": 180.0, "ma_20": 175.0, "ma_50": 170.0, "rsi_14": 45.0,
-            "volatility_20": 0.015, "avg_sentiment_score": 0.3, "news_count": 5,
-            "social_bullish_pct": 58.0, "price_change_pct": 1.2, "volume_change_pct": 5.0,
+            "sma_5": 180.0, "sma_20": 175.0, "sma_50": 170.0, "rsi_14": 45.0,
+            "volatility_20d": 0.28, "avg_sentiment_score": 0.3, "news_count": 5,
+            "social_bullish_pct": 58.0, "daily_return": 1.2, "volume_change_pct": 5.0,
         }])
 
     def test_parse_agent_response_valid(self):
