@@ -234,16 +234,23 @@ def _sqlite_query(
     ticker: str | None = None,
     limit: int = 100,
     order_by: str = "rowid DESC",
-    where_extra: str = "",
+    date_col: str | None = None,
+    date_cutoff: str | None = None,
 ) -> list[dict]:
+    """
+    Parameterised SQLite query. All user-supplied values go through
+    placeholders — never interpolated into the SQL string.
+    `order_by` is from internal callers only (never user input).
+    """
     conn = _sqlite_conn()
     where_parts = []
     params: list[Any] = []
     if ticker:
         where_parts.append("ticker = ?")
         params.append(ticker)
-    if where_extra:
-        where_parts.append(where_extra)
+    if date_col and date_cutoff:
+        where_parts.append(f"{date_col} >= ?")
+        params.append(date_cutoff)
     where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     sql = f"SELECT * FROM {table} {where_clause} ORDER BY {order_by} LIMIT ?"
     params.append(limit)
@@ -369,16 +376,36 @@ def _bq_query(
     ticker: str | None = None,
     limit: int = 100,
     order_by: str | None = None,
+    date_col: str | None = None,
+    date_cutoff: str | None = None,
 ) -> list[dict]:
+    """
+    Parameterised BigQuery SELECT. ticker and date_cutoff are passed as
+    named query parameters — never interpolated into the SQL string.
+    """
+    from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
+
     client = _bq_client()
     if order_by is None:
         order_by = f"{_bq_timestamp_col(table)} DESC"
-    where = f"WHERE ticker = '{ticker}'" if ticker else ""
+
+    conditions: list[str] = []
+    bq_params: list[ScalarQueryParameter] = []
+
+    if ticker:
+        conditions.append("ticker = @ticker")
+        bq_params.append(ScalarQueryParameter("ticker", "STRING", ticker))
+    if date_col and date_cutoff:
+        conditions.append(f"{date_col} >= @date_cutoff")
+        bq_params.append(ScalarQueryParameter("date_cutoff", "STRING", date_cutoff))
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     sql = (
         f"SELECT * FROM `{_bq_full_table(table)}` "
         f"{where} ORDER BY {order_by} LIMIT {limit}"
     )
-    return [dict(row) for row in client.query(sql).result()]
+    job_config = QueryJobConfig(query_parameters=bq_params)
+    return [dict(row) for row in client.query(sql, job_config=job_config).result()]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,36 +513,24 @@ def get_latest_social(ticker: str, limit: int = 10) -> list[dict]:
 def get_stock_history(ticker: str, days: int = 30) -> list[dict]:
     cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     if config.get_storage_backend() == "bigquery":
-        client = _bq_client()
-        sql = (
-            f"SELECT * FROM `{_bq_full_table('stock_prices')}` "
-            f"WHERE ticker = '{ticker}' AND date >= '{cutoff}' "
-            f"ORDER BY date DESC LIMIT {days + 5}"
+        return _bq_query(
+            "stock_prices", ticker=ticker, limit=days + 5,
+            order_by="date DESC", date_col="date", date_cutoff=cutoff,
         )
-        return [dict(r) for r in client.query(sql).result()]
     return _sqlite_query(
-        "stock_prices",
-        ticker=ticker,
-        limit=days + 5,
-        order_by="date DESC",
-        where_extra=f"date >= '{cutoff}'",
+        "stock_prices", ticker=ticker, limit=days + 5,
+        order_by="date DESC", date_col="date", date_cutoff=cutoff,
     )
 
 
 def get_news_history(ticker: str, days: int = 7) -> list[dict]:
     cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
     if config.get_storage_backend() == "bigquery":
-        client = _bq_client()
-        sql = (
-            f"SELECT * FROM `{_bq_full_table('news_articles')}` "
-            f"WHERE ticker = '{ticker}' AND published_at >= '{cutoff}' "
-            f"ORDER BY published_at DESC LIMIT 50"
+        return _bq_query(
+            "news_articles", ticker=ticker, limit=50,
+            order_by="published_at DESC", date_col="published_at", date_cutoff=cutoff,
         )
-        return [dict(r) for r in client.query(sql).result()]
     return _sqlite_query(
-        "news_articles",
-        ticker=ticker,
-        limit=50,
-        order_by="published_at DESC",
-        where_extra=f"published_at >= '{cutoff}'",
+        "news_articles", ticker=ticker, limit=50,
+        order_by="published_at DESC", date_col="published_at", date_cutoff=cutoff,
     )

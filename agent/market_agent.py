@@ -9,7 +9,9 @@ Uses LangChain's AgentExecutor with three tools:
 Falls back to a deterministic rule-based recommendation when no LLM is
 configured so the pipeline runs without API keys.
 """
+import ast
 import json
+import operator
 import re
 import uuid
 from datetime import datetime
@@ -22,6 +24,52 @@ from pipeline.database import (
     get_latest_stock_price,
     insert_agent_recommendations,
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent system prompt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Safe arithmetic evaluator (replaces eval())
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _safe_eval(expr: str) -> float:
+    """
+    Evaluate a simple arithmetic expression using Python's AST parser.
+    Only numeric literals and the operators +, -, *, /, ** are allowed.
+    Raises ValueError for any other construct.
+    """
+    def _eval(node: ast.AST) -> float:
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)):
+                raise ValueError(f"Non-numeric constant: {node.value!r}")
+            return float(node.value)
+        if isinstance(node, ast.BinOp):
+            op = type(node.op)
+            if op not in _OPS:
+                raise ValueError(f"Unsupported operator: {op.__name__}")
+            return _OPS[op](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp):
+            op = type(node.op)
+            if op not in _OPS:
+                raise ValueError(f"Unsupported unary operator: {op.__name__}")
+            return _OPS[op](_eval(node.operand))
+        raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+    tree = ast.parse(expr.strip(), mode="eval")
+    return _eval(tree.body)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent system prompt
@@ -118,13 +166,11 @@ def _build_langchain_tools(ticker: str):
         args_schema: Type[BaseModel] = CalcInput
 
         def _run(self, expression: str) -> str:
-            # Restrict to safe arithmetic only
-            safe = re.sub(r"[^0-9+\-*/().\s]", "", expression)
             try:
-                result = eval(safe, {"__builtins__": {}})  # noqa: S307
-                return str(round(float(result), 4))
+                result = _safe_eval(expression)
+                return str(round(result, 4))
             except Exception as exc:
-                return f"Error: {exc}"
+                return f"Error evaluating expression: {exc}"
 
     return [QueryStockDataTool(), QueryNewsTool(), CalculatorTool()]
 
@@ -192,13 +238,24 @@ def _build_agent(ticker: str):
 # Response parsing
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _extract_json_object(text: str) -> dict:
+    """Parse the first complete JSON object using raw_decode (no greedy regex)."""
+    decoder = json.JSONDecoder()
+    idx = text.find("{")
+    if idx == -1:
+        raise ValueError("No JSON object found")
+    try:
+        obj, _ = decoder.raw_decode(text, idx)
+        if not isinstance(obj, dict):
+            raise ValueError(f"Expected JSON object, got {type(obj).__name__}")
+        return obj
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON parse error: {exc}") from exc
+
+
 def parse_agent_response(raw: str) -> dict:
     cleaned = re.sub(r"```(?:json)?", "", raw).strip()
-    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if not match:
-        raise ValueError(f"No JSON found in agent response: {raw[:200]}")
-
-    data = json.loads(match.group())
+    data = _extract_json_object(cleaned)
     action = str(data.get("action", "HOLD")).upper()
     if action not in ("BUY", "HOLD", "SELL"):
         action = "HOLD"

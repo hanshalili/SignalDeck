@@ -238,16 +238,29 @@ _VALID_RECS = {"BUY", "HOLD", "SELL"}
 _VALID_CONF = {"low", "medium", "high"}
 
 
+def _extract_json_object(text: str) -> dict:
+    """
+    Locate and parse the first complete JSON object in `text` using
+    JSONDecoder.raw_decode() — avoids greedy regex that can swallow
+    content outside the intended object.
+    """
+    decoder = json.JSONDecoder()
+    idx = text.find("{")
+    if idx == -1:
+        raise ValueError("No JSON object found")
+    try:
+        obj, _ = decoder.raw_decode(text, idx)
+        if not isinstance(obj, dict):
+            raise ValueError(f"Expected JSON object, got {type(obj).__name__}")
+        return obj
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON parse error: {exc}") from exc
+
+
 def parse_llm_response(raw: str) -> dict:
     """Strip markdown fences, parse JSON, validate and normalise fields."""
-    # Remove code fences
     cleaned = re.sub(r"```(?:json)?", "", raw).strip()
-    # Find first { ... }
-    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if not match:
-        raise ValueError(f"No JSON object found in LLM response: {raw[:200]}")
-
-    data = json.loads(match.group())
+    data = _extract_json_object(cleaned)
 
     def _lower(key: str) -> str:
         return str(data.get(key, "")).lower()
