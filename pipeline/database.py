@@ -273,6 +273,21 @@ def _bq_full_table(table: str) -> str:
     return f"{config.GCP_PROJECT_ID}.{config.GCP_DATASET_ID}.{table}"
 
 
+def _bq_col_type(col: str, sqlite_type: str) -> str:
+    """Map column name + SQLite type to the correct BigQuery type."""
+    # Partition columns must be DATE or TIMESTAMP in BigQuery
+    if col == "date":
+        return "DATE"
+    if col.endswith("_at"):
+        return "TIMESTAMP"
+    t = sqlite_type.upper()
+    if "REAL" in t or "FLOAT" in t:
+        return "FLOAT64"
+    if "INTEGER" in t or "INT" in t:
+        return "INT64"
+    return "STRING"
+
+
 def _bq_init_db() -> None:
     from google.cloud import bigquery
 
@@ -288,16 +303,26 @@ def _bq_init_db() -> None:
 
     for table, schema in SCHEMAS.items():
         bq_schema = [
-            bigquery.SchemaField(col, _bq_dtype(dtype))
+            bigquery.SchemaField(col, _bq_col_type(col, dtype))
             for col, dtype in schema["columns"]
         ]
         table_ref = client.dataset(config.GCP_DATASET_ID).table(table)
         bq_table = bigquery.Table(table_ref, schema=bq_schema)
 
-        if schema.get("bq_partition"):
-            bq_table.time_partitioning = bigquery.TimePartitioning(
-                field=schema["bq_partition"]
-            )
+        partition_col = schema.get("bq_partition")
+        if partition_col:
+            col_bq_type = _bq_col_type(partition_col, "TEXT")
+            if col_bq_type == "DATE":
+                bq_table.time_partitioning = bigquery.TimePartitioning(
+                    type_=bigquery.TimePartitioningType.DAY,
+                    field=partition_col,
+                )
+            elif col_bq_type == "TIMESTAMP":
+                bq_table.time_partitioning = bigquery.TimePartitioning(
+                    type_=bigquery.TimePartitioningType.DAY,
+                    field=partition_col,
+                )
+
         if schema.get("bq_cluster"):
             bq_table.clustering_fields = schema["bq_cluster"]
 
@@ -329,13 +354,25 @@ def _bq_merge(table: str, rows: list[dict]) -> int:
     return len(rows)
 
 
+def _bq_timestamp_col(table: str) -> str:
+    """Return the best timestamp column for ORDER BY in the given table."""
+    cols = {c for c, _ in SCHEMAS[table]["columns"]}
+    if "ingested_at" in cols:
+        return "ingested_at"
+    if "created_at" in cols:
+        return "created_at"
+    return "_PARTITIONTIME"
+
+
 def _bq_query(
     table: str,
     ticker: str | None = None,
     limit: int = 100,
-    order_by: str = "ingested_at DESC",
+    order_by: str | None = None,
 ) -> list[dict]:
     client = _bq_client()
+    if order_by is None:
+        order_by = f"{_bq_timestamp_col(table)} DESC"
     where = f"WHERE ticker = '{ticker}'" if ticker else ""
     sql = (
         f"SELECT * FROM `{_bq_full_table(table)}` "
@@ -369,11 +406,16 @@ def _insert(table: str, rows: list[dict]) -> int:
     if not rows:
         return 0
     now = datetime.utcnow().isoformat()
+    schema_cols = {c for c, _ in SCHEMAS[table]["columns"]}
     for row in rows:
-        if "ingested_at" not in row or not row["ingested_at"]:
+        if "ingested_at" in schema_cols and not row.get("ingested_at"):
             row["ingested_at"] = now
-        if "created_at" in dict(SCHEMAS[table]["columns"]) and not row.get("created_at"):
+        if "created_at" in schema_cols and not row.get("created_at"):
             row["created_at"] = now
+        # Remove any keys not in the schema (prevents BQ "no such field" errors)
+        for key in list(row.keys()):
+            if key not in schema_cols:
+                del row[key]
 
     backend = config.get_storage_backend()
     n = _bq_merge(table, rows) if backend == "bigquery" else _sqlite_upsert(table, rows)
@@ -422,20 +464,35 @@ def query(
 
 
 def get_latest_stock_price(ticker: str) -> dict | None:
-    rows = _sqlite_query("stock_prices", ticker=ticker, limit=1, order_by="date DESC")
+    if config.get_storage_backend() == "bigquery":
+        rows = _bq_query("stock_prices", ticker=ticker, limit=1, order_by="date DESC")
+    else:
+        rows = _sqlite_query("stock_prices", ticker=ticker, limit=1, order_by="date DESC")
     return rows[0] if rows else None
 
 
 def get_latest_news(ticker: str, limit: int = 10) -> list[dict]:
+    if config.get_storage_backend() == "bigquery":
+        return _bq_query("news_articles", ticker=ticker, limit=limit, order_by="published_at DESC")
     return _sqlite_query("news_articles", ticker=ticker, limit=limit, order_by="published_at DESC")
 
 
 def get_latest_social(ticker: str, limit: int = 10) -> list[dict]:
+    if config.get_storage_backend() == "bigquery":
+        return _bq_query("social_signals", ticker=ticker, limit=limit, order_by="published_at DESC")
     return _sqlite_query("social_signals", ticker=ticker, limit=limit, order_by="published_at DESC")
 
 
 def get_stock_history(ticker: str, days: int = 30) -> list[dict]:
     cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    if config.get_storage_backend() == "bigquery":
+        client = _bq_client()
+        sql = (
+            f"SELECT * FROM `{_bq_full_table('stock_prices')}` "
+            f"WHERE ticker = '{ticker}' AND date >= '{cutoff}' "
+            f"ORDER BY date DESC LIMIT {days + 5}"
+        )
+        return [dict(r) for r in client.query(sql).result()]
     return _sqlite_query(
         "stock_prices",
         ticker=ticker,
@@ -447,6 +504,14 @@ def get_stock_history(ticker: str, days: int = 30) -> list[dict]:
 
 def get_news_history(ticker: str, days: int = 7) -> list[dict]:
     cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    if config.get_storage_backend() == "bigquery":
+        client = _bq_client()
+        sql = (
+            f"SELECT * FROM `{_bq_full_table('news_articles')}` "
+            f"WHERE ticker = '{ticker}' AND published_at >= '{cutoff}' "
+            f"ORDER BY published_at DESC LIMIT 50"
+        )
+        return [dict(r) for r in client.query(sql).result()]
     return _sqlite_query(
         "news_articles",
         ticker=ticker,
