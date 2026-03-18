@@ -191,7 +191,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | — | Falls back to rule-based scoring |
 | `REDDIT_CLIENT_ID` / `_SECRET` | — | Falls back to Gaussian mock |
 | `STOCKTWITS_ACCESS_TOKEN` | — | Falls back to Gaussian mock |
-| `TICKERS` | `AAPL,MSFT,GOOGL,AMZN,META` | Comma-separated |
+| `TICKERS` | `AAPL,NVDA,TSLA` | Comma-separated |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` |
 | `AIRFLOW_HOME` | `./airflow` | Required if using Airflow |
 
@@ -251,7 +251,7 @@ pytest tests/ -v
 ```
 ╭──────────────────────────── Pipeline Start ────────────────────────────────╮
 │ SignalDeck AI — Intelligent Market Analysis System                          │
-│ Tickers : AAPL, MSFT, GOOGL, AMZN, META                                    │
+│ Tickers : AAPL, NVDA, TSLA                                                  │
 │ Steps   : init, ingest, transform, llm, agent                              │
 │ Backend : bigquery                                                          │
 ╰─────────────────────────────────────────────────────────────────────────────╯
@@ -266,11 +266,9 @@ pytest tests/ -v
 ╭────────┬───────────┬──────────┬────────┬─────────┬────────┬────────────┬─────────╮
 │ Ticker │ Sentiment │ Trend    │ Risk   │ LLM Rec │ Agent  │ Confidence │ Target  │
 ├────────┼───────────┼──────────┼────────┼─────────┼────────┼────────────┼─────────┤
-│ AAPL   │ bullish   │ uptrend  │ medium │ BUY     │ BUY    │ 72%        │ $209.14 │
-│ MSFT   │ bullish   │ uptrend  │ low    │ BUY     │ BUY    │ 80%        │ $453.60 │
-│ GOOGL  │ neutral   │ sideways │ medium │ HOLD    │ HOLD   │ 50%        │ —       │
-│ AMZN   │ bullish   │ uptrend  │ medium │ BUY     │ BUY    │ 65%        │ $199.80 │
-│ META   │ neutral   │ sideways │ medium │ HOLD    │ HOLD   │ 55%        │ —       │
+│ AAPL   │ bullish   │ uptrend  │ medium │ BUY     │ HOLD   │ 50%        │ $225.87 │
+│ NVDA   │ neutral   │ sideways │ high   │ HOLD    │ HOLD   │ 50%        │ $861.14 │
+│ TSLA   │ bearish   │ downtrend│ medium │ SELL    │ SELL   │ 70%        │ $199.96 │
 ╰────────┴───────────┴──────────┴────────┴─────────┴────────┴────────────┴─────────╯
 ```
 
@@ -289,7 +287,7 @@ Creates 7 tables in either SQLite or BigQuery. BigQuery tables are created with 
 | `ingest_stocks.py` | Alpha Vantage `TIME_SERIES_DAILY` | Geometric Brownian Motion | `md5(ticker)` |
 | `ingest_news.py` | NewsAPI `/everything` | Templated articles + preset sentiments | ticker + date |
 | `ingest_social.py` | Reddit OAuth2 + StockTwits | Gaussian noise ±12% std dev | ticker + date |
-| `ingest_fundamentals.py` | Alpha Vantage `OVERVIEW` | Pre-built snapshots (AAPL–META) | — |
+| `ingest_fundamentals.py` | Alpha Vantage `OVERVIEW` | Pre-built snapshots per ticker | — |
 
 All ingesters use `@retry` via tenacity with exponential backoff. Fallbacks activate automatically on `ImportError`, network failure, or missing credentials.
 
@@ -396,7 +394,7 @@ Each task pushes a result dict to XCom for downstream inspection and alerting:
 
 ```python
 # ingest_stocks task
-ti.xcom_push(key="rows_inserted", value={"AAPL": 90, "MSFT": 90, ...})
+ti.xcom_push(key="rows_inserted", value={"AAPL": 90, "NVDA": 90, "TSLA": 90})
 ```
 
 Tasks are configured with `retries=2`, `retry_delay=timedelta(minutes=5)`. LLM tasks log a warning and continue — they do not fail the DAG — when no API key is present.
