@@ -1,0 +1,104 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SignalDeck AI — Local development stack
+#
+# Services
+# ────────
+#   streamlit   — Interactive dashboard  → http://localhost:8501
+#   airflow     — Pipeline orchestration → http://localhost:8080  (admin / admin)
+#
+# Quick start
+# ───────────
+#   cp .env.example .env           # fill in API keys (all optional)
+#   docker compose up --build
+#
+# To run only the dashboard (no Airflow):
+#   docker compose up streamlit
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-common-env: &common-env
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-sqlite}
+  SQLITE_DB_PATH: /app/data/signaldeck.db
+  GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+  GCP_DATASET_ID: ${GCP_DATASET_ID:-signaldeck}
+  GCS_BUCKET: ${GCS_BUCKET:-}
+  GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+  ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+  NEWS_API_KEY: ${NEWS_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+  REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-SignalDeck/1.0}
+  STOCKTWITS_ACCESS_TOKEN: ${STOCKTWITS_ACCESS_TOKEN:-}
+  TICKERS: ${TICKERS:-AAPL,MSFT,GOOGL,AMZN,META}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+services:
+
+  # ── Streamlit dashboard ─────────────────────────────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: signaldeck-ai:latest
+    container_name: signaldeck_dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      <<: *common-env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: streamlit run app/dashboard.py --server.port=8501 --server.address=0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Airflow (standalone — single container, SQLite metadata) ─────────────────
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: signaldeck-ai:latest
+    container_name: signaldeck_airflow
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *common-env
+      AIRFLOW_HOME: /app/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-change_me_in_production}
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      # Override admin credentials via environment — do NOT use default admin/admin in prod
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./dags:/app/airflow/dags
+    command: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create
+          --username $${_AIRFLOW_WWW_USER_USERNAME}
+          --password $${_AIRFLOW_WWW_USER_PASSWORD}
+          --firstname Signal --lastname Deck
+          --role Admin --email admin@signaldeck.local 2>/dev/null || true &&
+        airflow webserver --port 8080 &
+        airflow scheduler
+      "
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  signaldeck_data:

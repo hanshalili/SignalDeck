@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 import config
 from logger import log
 from pipeline.database import insert_fundamentals
+from pipeline.gcs_writer import upload_raw_to_gcs
 
 _AV_URL = "https://www.alphavantage.co/query"
 
@@ -217,6 +218,15 @@ def _fetch_av_overview(ticker: str) -> Optional[dict]:
 
 
 def ingest_ticker_fundamentals(ticker: str) -> int:
+    """
+    Ingest fundamental data for a single ticker.
+
+    Primary: Alpha Vantage OVERVIEW endpoint.
+    Fallback: pre-built mock snapshot seeded per ticker.
+    Stages the record to GCS before writing to the database.
+
+    Returns 1 on success, 0 on unexpected failure.
+    """
     log.info("Ingesting fundamentals: {}", ticker)
 
     row = None
@@ -230,12 +240,14 @@ def ingest_ticker_fundamentals(ticker: str) -> int:
         template = _MOCK_FUNDAMENTALS.get(ticker.upper(), _DEFAULT_FUNDAMENTALS)
         row = {"ticker": ticker, **template}
 
+    upload_raw_to_gcs([row], source="fundamentals")
     n = insert_fundamentals([row])
     log.info("Stored fundamentals for {}", ticker)
     return n
 
 
 def ingest_all_fundamentals(tickers: Optional[list[str]] = None) -> dict[str, int]:
+    """Ingest fundamentals for all configured tickers. Returns {ticker: row_count}."""
     tickers = tickers or config.TICKERS
     results: dict[str, int] = {}
     for ticker in tickers:

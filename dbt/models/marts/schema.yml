@@ -1,0 +1,78 @@
+version: 2
+
+models:
+  - name: company_performance
+    description: >
+      Daily company performance mart combining price action, engineered features,
+      LLM signal, agent action, and fundamentals. One row per ticker per trading day.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: price_date
+        tests: [not_null]
+      - name: close_price
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+      - name: llm_recommendation
+        tests:
+          - accepted_values:
+              values: ["BUY", "HOLD", "SELL"]
+              quote: true
+      - name: agent_action
+        tests:
+          - accepted_values:
+              values: ["BUY", "HOLD", "SELL"]
+              quote: true
+      - name: rsi_regime
+        tests:
+          - accepted_values:
+              values: ["oversold", "neutral", "overbought"]
+              quote: true
+
+  - name: volatility_analysis
+    description: >
+      Daily volatility regime analysis per ticker. Includes Bollinger Bands,
+      RSI bands, momentum regime, sector vol rank, and squeeze signal.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: price_date
+        tests: [not_null]
+      - name: vol_regime
+        tests:
+          - accepted_values:
+              values: ["normal", "elevated", "very_high"]
+              quote: true
+      - name: rsi_band
+        tests:
+          - accepted_values:
+              values: ["oversold", "neutral", "overbought"]
+              quote: true
+      - name: momentum_regime
+        tests:
+          - accepted_values:
+              values: ["strong_up", "up", "flat", "down", "strong_down"]
+              quote: true
+
+  - name: catalyst_tracking
+    description: >
+      Company catalyst event log. Captures news sentiment spikes, volume spikes,
+      price gaps, and RSI extremes. Includes forward 3-day return to measure catalyst impact.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: event_date
+        tests: [not_null]
+      - name: event_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["news_sentiment_spike", "volume_spike", "price_gap", "rsi_extreme"]
+              quote: true
+      - name: sentiment_direction
+        tests:
+          - accepted_values:
+              values: ["positive", "negative", "neutral"]
+              quote: true

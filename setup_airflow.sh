@@ -29,9 +29,19 @@ else
 fi
 
 echo "==> Creating Airflow admin user"
+# Credentials are read from environment variables so they are never hardcoded.
+# Set AIRFLOW_ADMIN_USER and AIRFLOW_ADMIN_PASSWORD in your .env before running.
+AIRFLOW_ADMIN_USER="${AIRFLOW_ADMIN_USER:-admin}"
+AIRFLOW_ADMIN_PASSWORD="${AIRFLOW_ADMIN_PASSWORD:-admin}"
+
+if [ "${AIRFLOW_ADMIN_PASSWORD}" = "admin" ]; then
+    echo "⚠️  WARNING: Using default password 'admin'." \
+         "Set AIRFLOW_ADMIN_PASSWORD in .env before exposing the UI."
+fi
+
 airflow users create \
-    --username admin \
-    --password admin \
+    --username "${AIRFLOW_ADMIN_USER}" \
+    --password "${AIRFLOW_ADMIN_PASSWORD}" \
     --firstname SignalDeck \
     --lastname Admin \
     --role Admin \
@@ -43,4 +53,4 @@ echo "✓ Airflow setup complete."
 echo ""
 echo "  Start the scheduler:  airflow scheduler"
 echo "  Start the webserver:  airflow webserver --port 8080"
-echo "  UI:                   http://localhost:8080  (admin / admin)"
+echo "  UI:                   http://localhost:8080  (${AIRFLOW_ADMIN_USER} / <your password>)"

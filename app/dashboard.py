@@ -32,6 +32,14 @@ from pipeline.database import (
     get_latest_social,
 )
 
+# ── dbt mart loaders (BigQuery only; silently skipped on SQLite) ──────────────
+
+@st.cache_data(ttl=300)
+def load_catalyst_events(ticker: str, limit: int = 50) -> pd.DataFrame:
+    """Load catalyst events from the dbt catalyst_tracking mart."""
+    rows = query("catalyst_tracking", ticker=ticker, limit=limit)
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +151,7 @@ def load_portfolio_overview(tickers: list[str]) -> pd.DataFrame:
 
 def render_sidebar() -> tuple[list[str], str, int]:
     with st.sidebar:
-        st.image("https://via.placeholder.com/200x60/1e2130/00c0ff?text=SignalDeck+AI", use_column_width=True)
+        st.markdown("## SignalDeck AI")
         st.markdown("### Configuration")
 
         all_tickers = config.TICKERS
@@ -403,6 +411,195 @@ def render_fundamentals(ticker: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Multi-company comparison tab
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_compare(tickers: list[str], days: int) -> None:
+    """
+    Render a side-by-side normalised price comparison for multiple tickers.
+
+    Prices are indexed to 100 at the start of the window so tickers with
+    different absolute prices can be compared on the same axis.
+    """
+    if len(tickers) < 2:
+        st.info("Select at least 2 tickers in the sidebar to compare.")
+        return
+
+    fig = go.Figure()
+    returns_records: list[dict] = []
+
+    for ticker in tickers:
+        df = load_stock_history(ticker, days=days)
+        if df.empty:
+            continue
+        # Normalise to 100 at the first available date
+        base = df["close"].iloc[0]
+        if base == 0:
+            continue
+        df["indexed"] = df["close"] / base * 100
+        fig.add_trace(go.Scatter(
+            x=df["date"],
+            y=df["indexed"],
+            mode="lines",
+            name=ticker,
+            hovertemplate=f"<b>{ticker}</b><br>Date: %{{x}}<br>Indexed: %{{y:.1f}}<extra></extra>",
+        ))
+
+        total_return = (df["close"].iloc[-1] - base) / base * 100
+        vol = df["close"].pct_change().std() * (252 ** 0.5) * 100
+        returns_records.append({
+            "Ticker": ticker,
+            f"Return ({days}d)": f"{total_return:+.1f}%",
+            "Ann. Volatility": f"{vol:.1f}%",
+            "Start Price": f"${base:.2f}",
+            "End Price": f"${df['close'].iloc[-1]:.2f}",
+        })
+
+    fig.add_hline(y=100, line_dash="dot", line_color="#666666", annotation_text="Baseline")
+    fig.update_layout(
+        title=f"Normalised Price Comparison (indexed to 100, last {days} days)",
+        template="plotly_dark",
+        height=500,
+        margin=dict(l=0, r=0, t=40, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        yaxis_title="Indexed Price",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    if returns_records:
+        st.subheader("Performance Summary")
+        st.dataframe(pd.DataFrame(returns_records), use_container_width=True, hide_index=True)
+
+    # Correlation heatmap
+    st.subheader("Return Correlation")
+    all_closes: dict[str, pd.Series] = {}
+    for ticker in tickers:
+        df = load_stock_history(ticker, days=days)
+        if not df.empty:
+            all_closes[ticker] = df.set_index("date")["close"].pct_change().dropna()
+
+    if len(all_closes) >= 2:
+        corr_df = pd.DataFrame(all_closes).corr()
+        fig_corr = px.imshow(
+            corr_df,
+            text_auto=".2f",
+            color_continuous_scale="RdBu_r",
+            zmin=-1, zmax=1,
+            title="Daily Return Correlation",
+            template="plotly_dark",
+        )
+        fig_corr.update_layout(height=350, margin=dict(l=0, r=0, t=40, b=0))
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Event Calendar tab
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_event_calendar(tickers: list[str]) -> None:
+    """
+    Render an event calendar showing company catalysts across selected tickers.
+
+    Events are sourced from the dbt catalyst_tracking mart when on BigQuery,
+    or from raw news_articles when on SQLite (graceful fallback).
+    """
+    st.subheader("Company Catalyst Events")
+
+    all_events: list[pd.DataFrame] = []
+
+    for ticker in tickers:
+        # Try dbt mart first (BigQuery path)
+        df = load_catalyst_events(ticker, limit=30)
+
+        if df.empty:
+            # Fallback: build events from raw news articles
+            news_df = load_news(ticker, limit=20)
+            if not news_df.empty and "published_at" in news_df.columns:
+                news_df = news_df.rename(columns={
+                    "headline": "event_description",
+                    "published_at": "event_date",
+                    "sentiment_label": "sentiment_direction",
+                    "sentiment_score": "sentiment_magnitude",
+                    "source": "event_source",
+                })
+                news_df["ticker"] = ticker
+                news_df["event_type"] = "news"
+                df = news_df[["ticker", "event_date", "event_type",
+                               "event_description", "sentiment_direction",
+                               "sentiment_magnitude", "event_source"]].copy()
+
+        if not df.empty:
+            all_events.append(df)
+
+    if not all_events:
+        st.info("No events found — run the pipeline first: `python run_pipeline.py --steps all`")
+        return
+
+    events = pd.concat(all_events, ignore_index=True)
+    events["event_date"] = pd.to_datetime(events["event_date"], errors="coerce")
+    events = events.dropna(subset=["event_date"]).sort_values("event_date", ascending=False)
+
+    # ── Filter controls ───────────────────────────────────────────────────────
+    col_filter1, col_filter2 = st.columns(2)
+    with col_filter1:
+        event_types = ["All"] + sorted(events["event_type"].dropna().unique().tolist())
+        selected_type = st.selectbox("Event type", event_types)
+    with col_filter2:
+        ticker_filter = st.multiselect("Filter by ticker", tickers, default=tickers)
+
+    if selected_type != "All":
+        events = events[events["event_type"] == selected_type]
+    if ticker_filter:
+        events = events[events["ticker"].isin(ticker_filter)]
+
+    # ── Timeline chart ────────────────────────────────────────────────────────
+    type_colors = {
+        "news_sentiment_spike": "#00c0ff",
+        "volume_spike":         "#ffd740",
+        "price_gap":            "#ff9800",
+        "rsi_extreme":          "#e040fb",
+        "news":                 "#00e676",
+    }
+
+    if "sentiment_direction" in events.columns:
+        fig = px.scatter(
+            events,
+            x="event_date",
+            y="ticker",
+            color="event_type",
+            color_discrete_map=type_colors,
+            hover_data=["event_description", "sentiment_direction", "sentiment_magnitude"],
+            title="Event Timeline",
+            template="plotly_dark",
+            height=350,
+        )
+        fig.update_traces(marker=dict(size=12, symbol="diamond"))
+        fig.update_layout(margin=dict(l=0, r=0, t=40, b=0), legend_title="Event Type")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Event table ───────────────────────────────────────────────────────────
+    display_cols = [c for c in [
+        "event_date", "ticker", "event_type", "event_description",
+        "sentiment_direction", "sentiment_magnitude", "event_source",
+        "price_move_pct", "volume_spike_ratio", "forward_3d_return_pct",
+    ] if c in events.columns]
+
+    st.dataframe(
+        events[display_cols].head(50),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # ── Summary stats ─────────────────────────────────────────────────────────
+    st.subheader("Catalyst Summary")
+    summary_cols = st.columns(len(tickers))
+    for i, ticker in enumerate(tickers):
+        ticker_events = events[events["ticker"] == ticker]
+        with summary_cols[i]:
+            st.metric(f"{ticker} events", len(ticker_events))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Raw Data tab
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -434,11 +631,13 @@ def main():
     st.markdown("---")
     st.subheader(f"Detailed View: {active_ticker}")
 
-    tab_chart, tab_ai, tab_social, tab_fund, tab_raw = st.tabs([
+    tab_chart, tab_ai, tab_social, tab_fund, tab_compare, tab_events, tab_raw = st.tabs([
         "📊 Price Chart",
         "🤖 AI Analysis",
         "💬 Social Signals",
         "📋 Fundamentals",
+        "📈 Compare",
+        "📅 Event Calendar",
         "🗃️ Raw Data",
     ])
 
@@ -453,6 +652,12 @@ def main():
 
     with tab_fund:
         render_fundamentals(active_ticker)
+
+    with tab_compare:
+        render_compare(selected, days)
+
+    with tab_events:
+        render_event_calendar(selected)
 
     with tab_raw:
         render_raw_data(active_ticker)

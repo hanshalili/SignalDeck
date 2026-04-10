@@ -20,6 +20,7 @@ import requests
 import config
 from logger import log
 from pipeline.database import insert_social_signals
+from pipeline.gcs_writer import upload_raw_to_gcs
 
 # ── Mock signal parameters ────────────────────────────────────────────────────
 
@@ -194,6 +195,15 @@ def _fetch_stocktwits(ticker: str) -> Optional[list[dict]]:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def ingest_ticker_social(ticker: str) -> int:
+    """
+    Ingest social sentiment signals for a single ticker.
+
+    Attempts Reddit and StockTwits in parallel; falls back to Gaussian mock
+    if neither source returns data.  Stages raw records to GCS before writing
+    to the database.
+
+    Returns number of rows inserted.
+    """
     log.info("Ingesting social signals: {}", ticker)
     all_rows: list[dict] = []
 
@@ -210,12 +220,14 @@ def ingest_ticker_social(ticker: str) -> int:
         log.info("Using mock social signals for {}", ticker)
         all_rows = _mock_social(ticker)
 
+    upload_raw_to_gcs(all_rows, source="social")
     n = insert_social_signals(all_rows)
     log.info("Stored {} social rows for {}", n, ticker)
     return n
 
 
 def ingest_all_social(tickers: Optional[list[str]] = None) -> dict[str, int]:
+    """Ingest social signals for all configured tickers. Returns {ticker: row_count}."""
     tickers = tickers or config.TICKERS
     results: dict[str, int] = {}
     for ticker in tickers:

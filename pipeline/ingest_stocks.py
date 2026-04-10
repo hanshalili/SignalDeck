@@ -18,6 +18,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 import config
 from logger import log
 from pipeline.database import insert_stock_prices
+from pipeline.gcs_writer import upload_raw_to_gcs
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -169,6 +170,7 @@ def ingest_ticker_prices(ticker: str) -> int:
         log.info("Using GBM mock data for {}", ticker)
         rows = _gbm_mock(ticker)
 
+    upload_raw_to_gcs(rows, source="stocks")
     n = insert_stock_prices(rows)
     log.info("Stored {} price rows for {}", n, ticker)
     return n

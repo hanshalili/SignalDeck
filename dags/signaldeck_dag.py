@@ -20,6 +20,7 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from airflow import DAG
+from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator
 
@@ -154,6 +155,36 @@ with DAG(
         python_callable=task_transform,
     )
 
+    dbt_run = BashOperator(
+        task_id="dbt_run",
+        bash_command=(
+            "cd {{ var.value.get('signaldeck_project_root', '" + str(_PROJECT_ROOT) + "') }}/dbt "
+            "&& dbt run --profiles-dir . --target prod"
+        ),
+        env={
+            "GCP_PROJECT_ID":               "{{ var.value.get('GCP_PROJECT_ID', '') }}",
+            "GCP_DATASET_ID":               "{{ var.value.get('GCP_DATASET_ID', 'signaldeck') }}",
+            "GOOGLE_APPLICATION_CREDENTIALS": "{{ var.value.get('GOOGLE_APPLICATION_CREDENTIALS', '') }}",
+        },
+        # dbt failures should not block LLM analysis — mart build is best-effort
+        # when BigQuery is not configured (e.g. SQLite dev mode).
+        trigger_rule="all_done",
+    )
+
+    dbt_test = BashOperator(
+        task_id="dbt_test",
+        bash_command=(
+            "cd {{ var.value.get('signaldeck_project_root', '" + str(_PROJECT_ROOT) + "') }}/dbt "
+            "&& dbt test --profiles-dir . --target prod"
+        ),
+        env={
+            "GCP_PROJECT_ID":               "{{ var.value.get('GCP_PROJECT_ID', '') }}",
+            "GCP_DATASET_ID":               "{{ var.value.get('GCP_DATASET_ID', 'signaldeck') }}",
+            "GOOGLE_APPLICATION_CREDENTIALS": "{{ var.value.get('GOOGLE_APPLICATION_CREDENTIALS', '') }}",
+        },
+        trigger_rule="all_done",
+    )
+
     llm_analysis = PythonOperator(
         task_id="llm_analysis",
         python_callable=task_llm_analysis,
@@ -165,8 +196,9 @@ with DAG(
     )
 
     # ── Dependency chain ──────────────────────────────────────────────────────
-    # start >> init_db >> [4 parallel ingest] >> transform >> llm >> agent >> end
+    # start >> init_db >> [4 parallel ingest] >> transform
+    #       >> dbt_run >> dbt_test >> llm_analysis >> agent_recommendations >> end
     start >> init_db
     init_db >> [ingest_stocks, ingest_news, ingest_social, ingest_fundamentals]
     [ingest_stocks, ingest_news, ingest_social, ingest_fundamentals] >> transform
-    transform >> llm_analysis >> agent_recommendations >> end
+    transform >> dbt_run >> dbt_test >> llm_analysis >> agent_recommendations >> end

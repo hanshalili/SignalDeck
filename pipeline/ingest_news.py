@@ -26,6 +26,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 import config
 from logger import log
 from pipeline.database import insert_news_articles
+from pipeline.gcs_writer import upload_raw_to_gcs
 
 _AV_URL      = "https://www.alphavantage.co/query"
 _AV_FUNCTION = "NEWS_SENTIMENT"
@@ -283,6 +284,14 @@ def _fetch_newsapi(ticker: str, page_size: int = 10) -> Optional[list[dict]]:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def ingest_ticker_news(ticker: str) -> int:
+    """
+    Ingest financial news for a single ticker.
+
+    Source priority: Alpha Vantage → NewsAPI → mock templates.
+    Stages raw records to GCS before writing to the database.
+
+    Returns number of rows inserted.
+    """
     log.info("Ingesting news: {}", ticker)
 
     rows = None
@@ -307,12 +316,14 @@ def ingest_ticker_news(ticker: str) -> int:
         log.info("Using mock news for {}", ticker)
         rows = _mock_articles(ticker)
 
+    upload_raw_to_gcs(rows, source="news")
     n = insert_news_articles(rows)
     log.info("Stored {} news rows for {}", n, ticker)
     return n
 
 
 def ingest_all_news(tickers: Optional[list[str]] = None) -> dict[str, int]:
+    """Ingest news for all configured tickers. Returns {ticker: row_count}."""
     tickers = tickers or config.TICKERS
     results: dict[str, int] = {}
     for ticker in tickers:

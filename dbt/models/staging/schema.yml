@@ -1,0 +1,100 @@
+version: 2
+
+sources:
+  - name: signaldeck_raw
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: "{{ env_var('GCP_DATASET_ID', 'signaldeck') }}"
+    description: "Raw tables written by SignalDeck ingestion pipelines."
+    tables:
+      - name: stock_prices
+        description: "Daily OHLCV data from Alpha Vantage or GBM mock."
+        columns:
+          - name: ticker
+            tests: [not_null]
+          - name: date
+            tests: [not_null]
+          - name: close
+            tests: [not_null]
+
+      - name: news_articles
+        description: "Financial news articles from Alpha Vantage / NewsAPI."
+        columns:
+          - name: article_id
+            tests: [not_null, unique]
+          - name: ticker
+            tests: [not_null]
+
+      - name: sentiment_scores
+        description: "VADER / provider sentiment scores per article."
+        columns:
+          - name: score_id
+            tests: [not_null, unique]
+          - name: article_id
+            tests: [not_null]
+
+      - name: fundamentals
+        description: "Company fundamentals snapshot from Alpha Vantage OVERVIEW."
+        columns:
+          - name: ticker
+            tests: [not_null]
+
+      - name: processed_features
+        description: "Engineered features: MA, RSI, volatility, sentiment aggregates."
+        columns:
+          - name: ticker
+            tests: [not_null]
+          - name: date
+            tests: [not_null]
+
+      - name: llm_analysis
+        description: "Structured LLM analysis per ticker per day."
+        columns:
+          - name: analysis_id
+            tests: [not_null, unique]
+
+      - name: agent_recommendations
+        description: "ReAct agent trade recommendations per ticker."
+        columns:
+          - name: rec_id
+            tests: [not_null, unique]
+
+models:
+  - name: stg_stock_prices
+    description: "Cleaned, typed OHLCV records with daily range and intraday return."
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: price_date
+        tests: [not_null]
+      - name: close_price
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+      - name: data_source
+        tests:
+          - accepted_values:
+              values: ["alpha_vantage", "mock_gbm"]
+
+  - name: stg_news_articles
+    description: "News articles joined with VADER sentiment scores."
+    columns:
+      - name: article_id
+        tests: [not_null, unique]
+      - name: ticker
+        tests: [not_null]
+      - name: final_sentiment_label
+        tests:
+          - accepted_values:
+              values: ["positive", "negative", "neutral"]
+              quote: true
+
+  - name: stg_fundamentals
+    description: "Latest fundamentals snapshot per ticker."
+    columns:
+      - name: ticker
+        tests: [not_null, unique]
+      - name: pe_ratio
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "is null or pe_ratio > 0"
